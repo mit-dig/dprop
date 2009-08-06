@@ -394,66 +394,112 @@ class DPropServToplevel(twisted.web.resource.Resource):
 
 ObjectPathRegexp = re.compile('[A-Za-z0-9]')
 
-def canonicalObjectPath(object_path):
-    return '/'.join(map(lambda(seg): canonicalObjectPathSegment(seg), object_path.split('/')))
+class InvalidURLException(dbus.DBusException):
+    """An invalid URL has been specified."""
+    _dbus_error_name = 'edu.mit.csail.dig.DPropMan.InvalidURLException'
 
-def canonicalObjectPathSegment(object_path_segment):
-    canonical = ''
-    for char in object_path_segment:
-        if ObjectPathRegexp.match(char):
-            canonical += char
-        else:
-            canonical += '_' + str(ord(char))
-    return canonical
+class NonExistantCellPathException(dbus.DBusException):
+    """No cell with the given path exists."""
+    _dbus_error_name = 'edu.mit.csail.dig.DPropMan.InvalidURLException'
+
+class Cell():
+    """A cell that is held locally."""
+    pass
+
+class RemoteCell():
+    """A cell that is held on a remote server."""
+    pass
 
 class DPropMan(dbus.service.Object):
+    """The DProp manager.  Contains functions accessible by DBus."""
+    
     def __init__(self, conn, object_path='/edu/mit/csail/dig/DPropMan'):
-        self.regNames = {}
-        self.interestedCells = {}
+        """Initializes the DPropMan object."""
         dbus.service.Object.__init__(self, conn, object_path)
-    
-    @dbus.service.method('edu.mit.csail.dig.DPropMan',
-                         in_signature='s', out_signature='s')
-    def registerCell(self, reqName):
-        # TODO: Disallow slashes in the name.
-        reqName = canonicalObjectPathSegment(reqName)
-        if reqName not in self.regNames:
-            self.regNames[reqName] = Cell(bus,
-                                          reqName,
-                                          "/edu/mit/csail/dig/DPropMan/Cells/%s" %
-                                          (reqName))
-            if reqName in self.interestedCells:
-                for cell in self.interestedCells[reqName]:
-                    self.regNames[reqName].addNeighbor(cell)
-                del self.interestedCells[reqName]
-        return reqName
-    
-    @dbus.service.method('edu.mit.csail.dig.DPropMan',
-                         in_signature='s', out_signature='s')
-    def remoteCell(self, path):
-        # Are we already connected to the remote cell?  If so, return
-        # the local name.
-        reqName = urlparse(path)
-        if reqName.scheme != 'http':
-            # TODO: Handle bad schemes.
-            pass
-        reqName = reqName.netloc + reqName.path
-        reqName = canonicalObjectPath(reqName)
-        if reqName not in self.regNames:
-            self.regNames[reqName] = RemoteCell(
-                bus,
-                reqName,
-                "/edu/mit/csail/dig/DPropMan/RemoteCells/%s" % (reqName),
-                path)
-        return reqName
+        self.cells = {}
+        self.remoteCells = {}
+        self.requestedCells = {}
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
                          in_signature='s')
-    def unregisterCell(self, name):
-        # TODO: If we're deleting a cell a remote cell is connected
-        # to, notify that cell.
-        self.regNames[name].destroy()
-        self.regNames[name] = None
+    def registerCell(self, cellPath):
+        """[DBUS METHOD] Registers a new cell under the given cell path if it
+        does not yet exist.  Otherwise, registers interest in the cell."""
+        if cellPath not in self.cells:
+            self.cells[cellPath] = Cell(cellPath,
+                                        "/edu/mit/csail/dig/DPropMan/Cells/%s" %
+                                        (cellPath))
+            if cellPath in self.requestedCells:
+                # Notify anyone waiting to hear from a non-existent
+                # cell that it now exists.
+                for client in self.requestedCells[cellPath]:
+                    # And automatically add it as a neighbor to the cell.
+                    self.cells[cellPath].addNeighbor(client)
+                # And delete it from the requestedCells after we're done.
+                del self.requestedCells[cellPath]
+        self.cells[cellPath].addNeighbor()
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan',
+                         in_signature='s')
+    def registerRemoteCell(self, url):
+        """[DBUS METHOD] Registers interest in a cell on a remote server at
+        the given URL."""
+        # Are we already connected to the remote cell?  If so, return
+        # the local name.
+        parsed_url = urlparse(url)
+        if parsed_url.scheme != 'http' and parsed_url.scheme != 'https':
+            # Balk at non-HTTP addresses.
+            raise InvalidURLException(
+                'The remote cell URL %s is not a valid HTTP URL.' % (url))
+        cellPath = parsed_url.netloc + parsed_url.path
+        
+        # Register the remote cell and send out a query for it.
+        if cellPath not in self.remoteCells[cellPath]:
+            self.remoteCells[cellPath] = RemoteCell(
+                cellPath,
+                "/edu/mit/csail/dig/DPropMan/RemoteCells/%s" % (cellPath),
+                url)
+        self.remoteCells[cellPath].addNeighbor()
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan',
+                         in_signature='s')
+    def unregisterCell(self, cellPath):
+        """[DBUS METHOD] Unregisters interest in a cell."""
+        # TODO: Notify remote cells that we don't exist any more.
+        if cellPath in self.cells:
+            self.cells[cellPath].removeNeighbor()
+            if len(self.cells[cellPath].neighbors) == 0:
+                self.cells[cellPath].destroy()
+                del self.cells[cellPath]
+        elif cellPath in self.remoteCells:
+            self.remoteCells[cellPath].removeNeighbor()
+            if len(self.remoteCells[cellPath].neighbors) == 0:
+                self.remoteCells[cellPath].destroy()
+                del self.remoteCells[cellPath]
+        else:
+            raise NonExistantCellPathException(
+                'The cell with path %s does not exist.' % (cellPath))
+    
+    # Blah, redo everything from here on out.
+    def remoteFetchCell(self, cellPath, client):
+        """[HTTP METHOD] Registers interest in a cell from a remote client."""
+        # Save the interest from the remote cell (TODO: and make sure we
+        # send a notification at the average refresh rate, so that the
+        # other end can (hopefully) know that it's not behind a NAT.)
+        if client is not None and cellPath in self.cells:
+            self.cells[cellPath].addNeighbor(client)
+            # Get the next data the remote client should see.
+            data, count = self.cells[cellPath].remoteData(client)
+            if count > 0:
+                gobject.idle_add(lambda: self.regNames[name].notifyNeighbors())
+            return data
+        elif remotePath is not None:
+            self.interestedCells[name] = self.interestedCells.get(name, [])
+            self.interestedCells[name].append(remotePath)
+            return None
+        elif name in self.regNames:
+            return self.regNames[name].data
+
     
     def fetchRemoteCell(self, name, remotePath):
         url = urlparse(remotePath)
@@ -492,25 +538,10 @@ class DPropMan(dbus.service.Object):
         # No longer interested in this cell's changes.
         self.regNames[name].deleteNeighbor(remotePath)
     
-    def gotRemoteCellRequest(self, name, remotePath):
-        # Save the interest from the remote cell (TODO: and make sure we
-        # send a notification at the average refresh rate, so that the
-        # other end can (hopefully) know that it's not behind a NAT.)
-        if remotePath is not None and name in self.regNames:
-            self.regNames[name].addNeighbor(remotePath)
-            data, count = self.regNames[name].remoteData(remotePath)
-            if count > 0:
-                gobject.idle_add(lambda: self.regNames[name].notifyNeighbors())
-            return data
-        elif remotePath is not None:
-            self.interestedCells[name] = self.interestedCells.get(name, [])
-            self.interestedCells[name].append(remotePath)
-            return None
-        elif name in self.regNames:
-            return self.regNames[name].data
-
 class ServerContextFactory:
+    """Generates the server SSL context."""
     def getContext(self):
+        """Sets up the OpenSSL context."""
         ctx = OpenSSL.SSL.Context(OpenSSL.SSL.SSLv23_METHOD)
         ctx.use_certificate_file('server.pem')
         ctx.use_privatekey_file('server.pem')
@@ -518,20 +549,37 @@ class ServerContextFactory:
         return ctx
     
     def verify(self, conn, cert, errnum, errdepth, retcode):
+        """Verify the client certificate.  We always return True, as we use
+        FOAF+SSL."""
         return True
 
-if __name__ == '__main__':
-    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+def main():
+    """Main program logic."""
     
-    bus = dbus.SessionBus()
-    name = dbus.service.BusName('edu.mit.csail.dig.DPropMan', bus)
+    # Before anything, parse command-line options.
+    parser = OptionParser()
+    parser.add_option('-p', '--port', dest='port',
+                      help='set DProp port number [default: %default]',
+                      default='37767')
+    (options, args) = parser.parse_args()
+    port = int(options.port)
+    
+    # First, set up the DBus connection.
+    DBusGMainLoop(set_as_default=True)
+    bus = dbus.SystemBus()
+#    name = dbus.service.BusName('edu.mit.csail.dig.DPropMan', bus)
     dpropman = DPropMan(bus, '/edu/mit/csail/dig/DPropMan')
     
-    site = twisted.web.server.Site(DPropServToplevel(dpropman))
+    # Second, set up the server for remote connections.
+    site = TwistedSite(DPropManTopLevel(dpropman))
     if UseSSL:
-        twisted.internet.reactor.listenSSL(Port, site, ServerContextFactory())
+        listenSSL(port, site, ServerContextFactory())
     else:
-        twisted.internet.reactor.listenTCP(Port, site)
+        listenTCP(port, site)
     
+    # Finally, run the glib loop
     mainloop = gobject.MainLoop()
     mainloop.run()
+
+if __name__ == '__main__':
+    main()
