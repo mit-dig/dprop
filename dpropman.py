@@ -1,16 +1,16 @@
 import gobject, traceback, sys, urllib, httplib, socket, re, sys
 from urlparse import urlparse
-import dbus, dbus.service, dbus.mainloop.glib
+import dbus, dbus.service
+from dbus.mainloop.glib import DBusGMainLoop
 import twisted.internet.glib2reactor
 if __name__ == '__main__':
     twisted.internet.glib2reactor.install()
+from twisted.web.resource import Resource
+from optparse import OptionParser
+from twisted.web.server import Site as TwistedSite
+from twisted.internet.reactor import listenSSL, listenTCP
 import twisted.web.resource, twisted.internet.reactor, twisted.web.server, twisted.internet.defer, twisted.web.error
 import OpenSSL.SSL
-
-# TODO: Can this ever not be set?
-HostName = socket.getfqdn()
-Port = 37767
-UseSSL = False
 
 def makeETag(data):
     """Generate an ETag."""
@@ -19,29 +19,146 @@ def makeETag(data):
     else:
         return "%08X" % (hash(data))
 
+class DPropManCell(Resource):
+    """HTTP resource representing a single cell."""
+    
+    maxMem = 100 * 1024
+    maxFields = 1024
+    maxSize = 10 * 1024 * 1024
+    
+    def __init__(self, dpropman, path):
+        Resource.__init__(self)
+        self.dpropman = dpropman
+        self.path = path
+    
+    def getChild(self, path, request):
+        return self
+    
+    def render_GET(self, request):
+        # Register interest to notify the next time this cell changes.
+        if self.dpropman.useSSL:
+            cert = request.channel.transport.getPeerCertificate()
+        data = self.dpropman.remoteFetchCell(
+            self.path,
+            request.getHeader('Referer'))
+        if isinstance(data, NoResource):
+            return data
+        request.setResponseCode(httplib.OK)
+        request.setETag(makeETag(data))
+        return data
+    
+    def render_POST(self, request):
+        if request.args['hash'][0] != makeETag(self.dpropman.cells[self.path].data()):
+            self.dpropman.gotRemoteCellChange(
+                self.path,
+                request.getHeader('Referer'))
+            request.setResponseCode(httplib.ACCEPTED)
+            request.setETag(makeETag(self.dpropman.regNames[self.path].data))
+            return self.dpropman.regNames[self.path].data
+        else:
+            request.setResponseCode(httplib.NOT_MODIFIED)
+            return ""
+    
+    def render_DELETE(self, request):
+        # You can't delete the resource, but you CAN delete your interest.
+        self.dpropman.gotRemoteCellDestroy(self.path,
+                                           request.headers.get('referer',
+                                                               None))
+        request.setResponseCode(httplib.ACCEPTED)
+        request.setETag(makeETag(self.dpropman.regNames[self.path].data))
+        return self.dprop.regNames[self.path].data
+
+class DPropManCells(Resource):
+    """Top-level of cell access."""
+
+    def __init__(self, dpropman):
+        Resource.__init__(self)
+        self.dpropman = dpropman
+    
+    def getChild(self, path, request):
+        path = '/'.join([path] + request.postpath)
+        if path in self.dpropman.cells or path in self.dpropman.remoteCells:
+            return DPropManCell(self.dpropman, path)
+        elif path == '':
+            return self
+        else:
+            self.dpropman.remoteFetchCell(
+                path,
+                request.getHeader('Referer'))
+            return twisted.web.error.NoResource("No such child resource.")
+    
+    def render_GET(self, request):
+        request.setResponseCode(httplib.OK)
+        request.setHeader('content-type', 'text/html')
+        return """<html>
+<head><title>DProp Cells</title></head>
+<body>
+<h1>DProp Cells</h1>
+<p>Hi! Cells live under me!</p>
+</body>
+</html>"""
+
+class DPropManTopLevel(Resource):
+    """Top-level of the HTTP server (no cells)"""
+    
+    def __init__(self, dpropman):
+        Resource.__init__(self)
+        self.cells = DPropManCells(dpropman)
+        self.putChild('Cells', self.cells)
+        self.putChild('', self)
+    
+    def render_GET(self, request):
+        request.setResponseCode(httplib.OK)
+        request.setHeader('content-type', 'text/html')
+        return """<html>
+<head><title>DProp Server</title></head>
+<body>
+<h1>DProp Server</h1>
+<p>Hi! I'm a DProp server set up on %s!</p>
+</body>
+</html>""" % (HostName)
+
+class InvalidURLException(dbus.DBusException):
+    """An invalid URL has been specified."""
+    _dbus_error_name = 'edu.mit.csail.dig.DPropMan.InvalidURLException'
+
+class NonExistantCellPathException(dbus.DBusException):
+    """No cell with the given path exists."""
+    _dbus_error_name = 'edu.mit.csail.dig.DPropMan.InvalidURLException'
+
+class Undefined():
+    """Undefined value."""
+    def __str__(self):
+        return '<undefined/>'
+
 class Cell(dbus.service.Object):
     """A local cell in a propagator network."""
     
-    def __init__(self, conn, name, object_path):
+    def __init__(self, conn, name, object_path, referer, cert, key):
         """Initialize the Cell."""
         self.object_path = object_path
+        self.referer = referer
         self.name = name
-        self.data = 'NULL'
+        self.data = str(Undefined())
         self.neighbors = {}
-        if UseSSL:
-            self.referer = "https://%s:%d/Cells/%s" % (HostName, Port, name)
-        else:
-            self.referer = "http://%s:%d/Cells/%s" % (HostName, Port, name)
+        self.neighborCount = 0
+        self.cert = cert
+        self.key = key
         dbus.service.Object.__init__(self, conn, object_path)
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def ChangeSignal(self, message):
-        """Signals a change in the cell's contents."""
+    def MergeContentsSignal(self, message):
+        """[DBUS SIGNAL] Signals a requested merge in the cell's content."""
+        pass
+    
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def NewContentsSignal(self, message):
+        """[DBUS SIGNAL] Signals updated cell content."""
         pass
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
     def DestroySignal(self):
-        """Signals the destruction of the cell."""
+        """[DBUS SIGNAL] Signals the destruction of the cell."""
         pass
     
     def notifyNeighbors(self):
@@ -55,7 +172,10 @@ class Cell(dbus.service.Object):
                     if url.scheme == 'http':
                         h = httplib.HTTPConnection(url.netloc)
                     elif url.scheme == 'https':
-                        h = httplib.HTTPSConnection(url.netloc, key_file='./server.pem', cert_file='./server.pem')
+                        h = httplib.HTTPSConnection(url.netloc,
+                                                    key_file=self.key,
+                                                    cert_file=self.cert)
+                    # TODO: Is POST satisfactory?
                     h.request('POST', url.path,
                               urllib.urlencode({'hash': makeETag(self.neighbors[neighbor]['data'][0])}),
                               {'Referer': self.referer,
@@ -77,26 +197,27 @@ class Cell(dbus.service.Object):
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s')
     def changeCell(self, data):
-        """Locally change the cell's contents to data."""
+        """[DBUS METHOD] Locally change the cell's contents to data."""
         # TODO: Track update rate for remote cells.
         if self.data != str(data):
             for neighbor in self.neighbors.keys():
                 self.neighbors[neighbor]['data'].append(str(data))
             self.data = str(data)
-            self.ChangeSignal(str(data))
+            self.NewContentsSignal(str(data))
             self.notifyNeighbors()
     
-    def remoteChangeCell(self, data):
-        """Change the cell's contents remotely."""
-        if self.data != str(data):
-            # Shift merge into programs; so we don't update OUR data yet.
-#            self.data = data
-            self.ChangeSignal(str(data))
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='s')
+    def mergeCell(self, data):
+        """[DBUS METHOD] Locally attempt to merge the cell's contents with
+        data."""
+        # TODO: Track update rate for remote cells.
+        self.MergeContentsSignal(str(data))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          out_signature='s')
     def data(self):
-        """Return the cell's data."""
+        """[DBUS METHOD] Return the cell's data."""
         return self.data
     
     def remoteData(self, neighbor):
@@ -108,16 +229,19 @@ class Cell(dbus.service.Object):
         else:
             return self.data, 0
     
-    def addNeighbor(self, neighbor):
+    def addNeighbor(self, neighbor=None):
         """Add a new neighbor."""
-        self.neighbors[neighbor] = self.neighbors.get(neighbor,
-                                                      {'notified': False,
-                                                       'data': []})
+        if neighbor is not None:
+            self.neighbors[neighbor] = self.neighbors.get(neighbor,
+                                                          {'notified': False,
+                                                           'data': []})
+        self.neighborCount += 1
 
-    def deleteNeighbor(self, neighbor):
+    def removeNeighbor(self, neighbor=None):
         """Remove an old neighbor."""
-        if neighbor in self.neighbors:
+        if neighbor is not None and neighbor in self.neighbors:
             del self.neighbors[neighbor]
+        self.neighborCount -= 1
 
     def destroyNeighbors(self):
         """Notify all neighbors that the cell has been destroyed."""
@@ -128,8 +252,11 @@ class Cell(dbus.service.Object):
                 if url.scheme == 'http':
                     h = httplib.HTTPConnection(url.netloc)
                 elif url.scheme == 'https':
-                    h = httplib.HTTPSConnection(url.netloc, key_file='./server.pem', cert_file='./server.pem')
+                    h = httplib.HTTPSConnection(url.netloc,
+                                                key_file=self.key,
+                                                cert_file=self.cert)
                 # TODO: If cells are remote cells?
+                # TODO: DELETE is no longer satisfactory.
                 h.request('DELETE', url.path,
                           header={'Referer': self.referer})
                 resp = h.getresponse()
@@ -150,17 +277,12 @@ class Cell(dbus.service.Object):
 class RemoteCell(Cell):
     """A cell referring to a remote cell."""
     
-    def __init__(self, conn, name, object_path, remote_path):
+    def __init__(self, conn, name, object_path, remote_path, referer,
+                 cert, key):
         """Initialize a remote cell."""
-        Cell.__init__(self, conn, name, object_path)
+        Cell.__init__(self, conn, name, object_path, referer, cert, key)
         
         url = urlparse(remote_path)
-        if UseSSL:
-            self.referer = "https://%s:%d/RemoteCells/%s%s" % (
-                HostName, Port, url.netloc, url.path)
-        else:
-            self.referer = "http://%s:%d/RemoteCells/%s%s" % (
-                HostName, Port, url.netloc, url.path)
         
         # Get the data from the remote server.
         self.remote_path = remote_path
@@ -170,12 +292,14 @@ class RemoteCell(Cell):
             if url.scheme == 'http':
                 h = httplib.HTTPConnection(url.netloc)
             elif url.scheme == 'https':
-                h = httplib.HTTPSConnection(url.netloc, key_file='./server.pem', cert_file='./server.pem')
+                h = httplib.HTTPSConnection(url.netloc,
+                                            key_file=self.key,
+                                            cert_file=self.cert)
             h.request('GET', url.path,
                       headers={'Referer': self.referer})
             resp = h.getresponse()
             if resp.status == httplib.NOT_FOUND:
-                self.data = 'NULL'
+                self.data = str(Undefined())
             elif resp.status != httplib.OK:
                 # TODO: Handle errors
                 pass
@@ -197,28 +321,42 @@ class RemoteCell(Cell):
         # outlier that is extra long, say, if a value has stabilized).
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def ChangeSignal(self, message):
+    def MergeContentsSignal(self, message):
+        """[DBUS SIGNAL] Signals a requested merge in the cell's content."""
+        pass
+    
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def NewContentsSignal(self, message):
+        """[DBUS SIGNAL] Signals updated cell content."""
         pass
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
     def DestroySignal(self):
-        """Signals the destruction of the cell."""
+        """[DBUS SIGNAL] Signals the destruction of the cell."""
         pass
+    
+    def changeCell(self, data):
+        """Locally change the cell's contents to data."""
+        # TODO: Track update rate for remote cells.
+        if self.data != str(data):
+            self.data = str(data)
+            self.NewContentsSignal(str(data))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s')
-    def changeCell(self, data):
-        """Change the RemoteCell locally."""
+    def mergeCell(self, data):
+        """[DBUS METHOD] Locally attempt to merge the cell's contents with
+        data."""
         if self.data != str(data):
-            self.data = str(data)
-            
             # Need to forward the change along to the remote cell.
             try:
                 url = urlparse(self.remote_path)
                 if url.scheme == 'http':
                     h = httplib.HTTPConnection(url.netloc)
                 elif url.scheme == 'https':
-                    h = httplib.HTTPSConnection(url.netloc, key_file='./server.pem', cert_file='./server.pem')
+                    h = httplib.HTTPSConnection(url.netloc,
+                                                key_file=self.key,
+                                                cert_file=self.cert)
                 h.request('POST', url.path,
                           urllib.urlencode({'hash': makeETag(self.data)}),
                           {'Referer': self.referer,
@@ -231,13 +369,11 @@ class RemoteCell(Cell):
             except httplib.HTTPException:
                 # TODO: Handle errors
                 pass
-            
-            self.ChangeSignal(data)
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          out_signature='s')
     def data(self):
-        """Return the cell's data."""
+        """[DBUS METHOD] Return the cell's data."""
         return self.data
 
     def destroy(self):
@@ -250,7 +386,9 @@ class RemoteCell(Cell):
             if url.scheme == 'http':
                 h = httplib.HTTPConnection(url.netloc)
             elif url.scheme == 'https':
-                h = httplib.HTTPSConnection(url.netloc, key_file='./server.pem', cert_file='./server.pem')
+                h = httplib.HTTPSConnection(url.netloc,
+                                            key_file=self.key,
+                                            cert_file=self.cert)
             h.request('DELETE', url.path,
                       headers={'Referer': self.referer})
             resp = h.getresponse()
@@ -266,159 +404,22 @@ class RemoteCell(Cell):
 
     # TODO: Diff-tracking?
 
-class DPropServCell(twisted.web.resource.Resource):
-    maxMem = 100 * 1024
-    maxFields = 1024
-    maxSize = 10 * 1024 * 1024
-    
-    def __init__(self, dpropman, path):
-        twisted.web.resource.Resource.__init__(self)
-        self.dpropman = dpropman
-        self.path = path
-    
-    def getChild(self, path, request):
-        return self
-    
-    def render_GET(self, request):
-        # Register interest to notify the next time this cell changes.
-        if UseSSL:
-            cert = request.channel.transport.getPeerCertificate()
-        data = self.dpropman.gotRemoteCellRequest(
-            self.path,
-            request.getHeader('Referer'))
-        if isinstance(data, twisted.web.error.NoResource):
-            return data
-        request.setResponseCode(httplib.OK)
-        request.setETag(makeETag(data))
-        return data
-    
-    def render_POST(self, request):
-        if request.args['hash'][0] != makeETag(self.dpropman.regNames[self.path].data):
-            self.dpropman.gotRemoteCellChange(
-                self.path,
-                request.getHeader('Referer'))
-            request.setResponseCode(httplib.ACCEPTED)
-            request.setETag(makeETag(self.dpropman.regNames[self.path].data))
-            return self.dpropman.regNames[self.path].data
-        else:
-            request.setResponseCode(httplib.NOT_MODIFIED)
-            return ""
-    
-    def render_DELETE(self, request):
-        # You can't delete the resource, but you CAN delete your interest.
-        self.dpropman.gotRemoteCellDestroy(self.path,
-                                           request.headers.get('referer',
-                                                               None))
-        request.setResponseCode(httplib.ACCEPTED)
-        request.setETag(makeETag(self.dpropman.regNames[self.path].data))
-        return self.dprop.regNames[self.path].data
-
-class DPropServCells(twisted.web.resource.Resource):
-    def __init__(self, dpropman):
-        twisted.web.resource.Resource.__init__(self)
-        self.dpropman = dpropman
-    
-    def getChild(self, path, request):
-        if path in self.dpropman.regNames and not isinstance(self.dpropman.regNames[path], RemoteCell):
-            return DPropServCell(self.dpropman, path)
-        elif path == '':
-            return self
-        else:
-            self.dpropman.gotRemoteCellRequest(
-                path,
-                request.getHeader('Referer'))
-            return twisted.web.error.NoResource("No such child resource.")
-    
-    def render_GET(self, request):
-        request.setResponseCode(httplib.OK)
-        request.setHeader('content-type', 'text/html')
-        return """<html>
-<head><title>DProp Local Cells</title></head>
-<body>
-<h1>DProp Local Cells</h1>
-<p>Hi! Local Cells live under me!</p>
-</body>
-</html>"""
-
-class DPropServRemoteCells(twisted.web.resource.Resource):
-    addSlash = True
-
-    def __init__(self, dpropman):
-        twisted.web.resource.Resource.__init__(self)
-        self.dpropman = dpropman
-    
-    def getChild(self, path, request):
-        path = '/'.join([path] + request.postpath)
-        if canonicalObjectPath(path) in self.dpropman.regNames and isinstance(self.dpropman.regNames[canonicalObjectPath(path)], RemoteCell):
-            return DPropServCell(self.dpropman, canonicalObjectPath(path))
-        elif path == '':
-            return self
-        else:
-            self.dpropman.gotRemoteCellRequest(
-                path,
-                request.getHeader('Referer'))
-            return twisted.web.error.NoResource("No such child resource.")
-    
-    def render_GET(self, request):
-        request.setResponseCode(httplib.OK)
-        request.setHeader('content-type', 'text/html')
-        return """<html>
-<head><title>DProp Remote Cells</title></head>
-<body>
-<h1>DProp Remote Cells</h1>
-<p>Hi! Remote Cells live under me!</p>
-</body>
-</html>"""
-
-class DPropServToplevel(twisted.web.resource.Resource):
-    """Top-level of the HTTP server (no cells)"""
-    
-    def __init__(self, dpropman):
-        twisted.web.resource.Resource.__init__(self)
-        self.cells = DPropServCells(dpropman)
-        self.remoteCells = DPropServRemoteCells(dpropman)
-        self.putChild('Cells', self.cells)
-        self.putChild('RemoteCells', self.remoteCells)
-        self.putChild('', self)
-    
-    def render_GET(self, request):
-        request.setResponseCode(httplib.OK)
-        request.setHeader('content-type', 'text/html')
-        return """<html>
-<head><title>DProp Server</title></head>
-<body>
-<h1>DProp Server</h1>
-<p>Hi! I'm a DProp server set up on %s!</p>
-</body>
-</html>""" % (HostName)
-
-ObjectPathRegexp = re.compile('[A-Za-z0-9]')
-
-class InvalidURLException(dbus.DBusException):
-    """An invalid URL has been specified."""
-    _dbus_error_name = 'edu.mit.csail.dig.DPropMan.InvalidURLException'
-
-class NonExistantCellPathException(dbus.DBusException):
-    """No cell with the given path exists."""
-    _dbus_error_name = 'edu.mit.csail.dig.DPropMan.InvalidURLException'
-
-class Cell():
-    """A cell that is held locally."""
-    pass
-
-class RemoteCell():
-    """A cell that is held on a remote server."""
-    pass
-
 class DPropMan(dbus.service.Object):
     """The DProp manager.  Contains functions accessible by DBus."""
     
-    def __init__(self, conn, object_path='/edu/mit/csail/dig/DPropMan'):
+    def __init__(self, conn, object_path, port, hostname,
+                 useSSL=False, cert=None, key=None):
         """Initializes the DPropMan object."""
         dbus.service.Object.__init__(self, conn, object_path)
         self.cells = {}
         self.remoteCells = {}
         self.requestedCells = {}
+        self.conn = conn
+        self.port = port
+        self.hostname = hostname
+        self.useSSL = useSSL
+        self.cert = cert
+        self.key = key
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
                          in_signature='s')
@@ -426,9 +427,21 @@ class DPropMan(dbus.service.Object):
         """[DBUS METHOD] Registers a new cell under the given cell path if it
         does not yet exist.  Otherwise, registers interest in the cell."""
         if cellPath not in self.cells:
-            self.cells[cellPath] = Cell(cellPath,
+            if self.useSSL:
+                referer = "https://%s:%d/Cells%s" % (self.hostname,
+                                                     self.port,
+                                                     cellPath)
+            else:
+                referer = "http://%s:%d/Cells%s" % (self.hostname,
+                                                    self.port,
+                                                    cellPath)
+            self.cells[cellPath] = Cell(self.conn,
+                                        cellPath,
                                         "/edu/mit/csail/dig/DPropMan/Cells/%s" %
-                                        (cellPath))
+                                        (cellPath),
+                                        referer,
+                                        self.cert,
+                                        self.key)
             if cellPath in self.requestedCells:
                 # Notify anyone waiting to hear from a non-existent
                 # cell that it now exists.
@@ -456,9 +469,12 @@ class DPropMan(dbus.service.Object):
         # Register the remote cell and send out a query for it.
         if cellPath not in self.remoteCells[cellPath]:
             self.remoteCells[cellPath] = RemoteCell(
+                self.conn,
                 cellPath,
                 "/edu/mit/csail/dig/DPropMan/RemoteCells/%s" % (cellPath),
-                url)
+                url,
+                self.cert,
+                self.key)
         self.remoteCells[cellPath].addNeighbor()
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
@@ -480,7 +496,6 @@ class DPropMan(dbus.service.Object):
             raise NonExistantCellPathException(
                 'The cell with path %s does not exist.' % (cellPath))
     
-    # Blah, redo everything from here on out.
     def remoteFetchCell(self, cellPath, client):
         """[HTTP METHOD] Registers interest in a cell from a remote client."""
         # Save the interest from the remote cell (TODO: and make sure we
@@ -491,19 +506,18 @@ class DPropMan(dbus.service.Object):
             # Get the next data the remote client should see.
             data, count = self.cells[cellPath].remoteData(client)
             if count > 0:
-                gobject.idle_add(lambda: self.regNames[name].notifyNeighbors())
+                gobject.idle_add(lambda: self.cells[name].notifyNeighbors())
             return data
         elif remotePath is not None:
             self.interestedCells[name] = self.interestedCells.get(name, [])
             self.interestedCells[name].append(remotePath)
             return None
-        elif name in self.regNames:
-            return self.regNames[name].data
-
+        elif cellPath in self.cells:
+            return self.cells[cellPath].data()
     
     def fetchRemoteCell(self, name, remotePath):
         url = urlparse(remotePath)
-        if UseSSL:
+        if self.useSSL:
             referer = "https://%s:%d/RemoteCells/%s%s" % (
                 HostName, Port, url.netloc, url.path)
         else:
@@ -540,11 +554,15 @@ class DPropMan(dbus.service.Object):
     
 class ServerContextFactory:
     """Generates the server SSL context."""
+    def __init__(self, cert, key):
+        self.cert = cert
+        self.key = key
+    
     def getContext(self):
         """Sets up the OpenSSL context."""
         ctx = OpenSSL.SSL.Context(OpenSSL.SSL.SSLv23_METHOD)
-        ctx.use_certificate_file('server.pem')
-        ctx.use_privatekey_file('server.pem')
+        ctx.use_certificate_file(self.cert)
+        ctx.use_privatekey_file(self.key)
         ctx.set_verify(OpenSSL.SSL.VERIFY_PEER, self.verify)
         return ctx
     
@@ -561,19 +579,28 @@ def main():
     parser.add_option('-p', '--port', dest='port',
                       help='set DProp port number [default: %default]',
                       default='37767')
+    parser.add_option('-c', '--cert', dest='cert',
+                      help='set certificate file [default: %default]',
+                      default='./server.pem')
+    parser.add_option('-k', '--key', dest='key',
+                      help='set private key file [default: %default]',
+                      default='./server.pem')
     (options, args) = parser.parse_args()
     port = int(options.port)
+    hostname = socket.getfqdn()
+    useSSL = False
     
     # First, set up the DBus connection.
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
 #    name = dbus.service.BusName('edu.mit.csail.dig.DPropMan', bus)
-    dpropman = DPropMan(bus, '/edu/mit/csail/dig/DPropMan')
+    dpropman = DPropMan(bus, '/edu/mit/csail/dig/DPropMan', port, hostname,
+                        useSSL, options.cert, options.key)
     
     # Second, set up the server for remote connections.
     site = TwistedSite(DPropManTopLevel(dpropman))
-    if UseSSL:
-        listenSSL(port, site, ServerContextFactory())
+    if useSSL:
+        listenSSL(port, site, ServerContextFactory(options.cert, options.key))
     else:
         listenTCP(port, site)
     
