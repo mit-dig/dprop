@@ -103,6 +103,7 @@ class DPropManTopLevel(Resource):
     
     def __init__(self, dpropman):
         Resource.__init__(self)
+        self.dpropman = dpropman
         self.cells = DPropManCells(dpropman)
         self.putChild('Cells', self.cells)
         self.putChild('', self)
@@ -116,7 +117,7 @@ class DPropManTopLevel(Resource):
 <h1>DProp Server</h1>
 <p>Hi! I'm a DProp server set up on %s!</p>
 </body>
-</html>""" % (HostName)
+</html>""" % (self.dpropman.hostname)
 
 class InvalidURLException(dbus.DBusException):
     """An invalid URL has been specified."""
