@@ -4,6 +4,7 @@ import sys
 import socket
 import httplib
 import re
+import urllib
 from optparse import OptionParser
 from urlparse import urlparse
 
@@ -42,6 +43,8 @@ class DPropManCell(Resource):
     
     def render_GET(self, request):
         # Register interest to notify the next time this cell changes.
+        if self.path in self.dpropman.remoteCells:
+            return ""
         if self.dpropman.useSSL:
             cert = request.channel.transport.getPeerCertificate()
         data = self.dpropman.remoteFetchCell(
@@ -54,13 +57,20 @@ class DPropManCell(Resource):
         return data
     
     def render_POST(self, request):
-        if request.args['hash'][0] != makeETag(self.dpropman.cells[self.path].data):
-            self.dpropman.gotRemoteCellChange(
+        if self.path in self.dpropman.cells and request.args['hash'][0] != makeETag(self.dpropman.cells[self.path].data):
+            self.dpropman.addFetchRemoteThunk(
                 self.path,
                 request.getHeader('Referer'))
             request.setResponseCode(httplib.ACCEPTED)
-            request.setETag(makeETag(self.dpropman.regNames[self.path].data))
-            return self.dpropman.regNames[self.path].data
+            request.setETag(makeETag(self.dpropman.cells[self.path].data))
+            return self.dpropman.cells[self.path].data
+        elif self.path in self.dpropman.remoteCells and request.args['hash'][0] != makeETag(self.dpropman.remoteCells[self.path].data):
+            self.dpropman.addFetchRemoteThunk(
+                self.path,
+                request.getHeader('Referer'))
+            request.setResponseCode(httplib.ACCEPTED)
+            request.setETag(makeETag(self.dpropman.remoteCells[self.path].data))
+            return ""
         else:
             request.setResponseCode(httplib.NOT_MODIFIED)
             return ""
@@ -71,8 +81,12 @@ class DPropManCell(Resource):
                                            request.headers.get('referer',
                                                                None))
         request.setResponseCode(httplib.ACCEPTED)
-        request.setETag(makeETag(self.dpropman.regNames[self.path].data))
-        return self.dprop.regNames[self.path].data
+        if self.path in self.dpropman.cells:
+            request.setETag(makeETag(self.dpropman.cells[self.path].data))
+            return self.dpropman.cells[self.path].data
+        elif self.path in self.dpropman.remoteCells:
+            request.setETag(makeETag(self.dpropman.remoteCells[self.path].data))
+            return ""
 
 class DPropManCells(Resource):
     """Top-level of cell access."""
@@ -220,6 +234,39 @@ class Cell(dbus.service.Object):
         data."""
         # TODO: Track update rate for remote cells.
         self.MergeContentsSignal(str(data))
+    
+    def remoteMergeCell(self, remote_path):
+        """Fetch a remote change to the cell and merge it."""
+        url = urlparse(remote_path)
+        
+        # Get the data from the remote server.
+        # TODO: Security (MitM)? Might be handled by HTTPS
+        try:
+            url = urlparse(remote_path)
+            if url.scheme == 'http':
+                h = httplib.HTTPConnection(url.netloc)
+            elif url.scheme == 'https':
+                h = httplib.HTTPSConnection(url.netloc,
+                                            key_file=self.key,
+                                            cert_file=self.cert)
+            h.request('GET', url.path,
+                      headers={'Referer': self.referer})
+            resp = h.getresponse()
+            if resp.status == httplib.NOT_FOUND:
+                data = str(Undefined())
+            elif resp.status != httplib.OK:
+                # TODO: Handle errors
+                pass
+            else:
+                # This changes based on the input.
+                data = str(resp.read())
+            h.close()
+        except httplib.HTTPException:
+            # TODO: Handle errors
+            pass
+        
+        # TODO: Track update rate for remote cells.
+        self.MergeContentsSignal(data)
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='', out_signature='s')
@@ -377,6 +424,39 @@ class RemoteCell(Cell):
                 # TODO: Handle errors
                 pass
     
+    def remoteChangeCell(self, remote_path):
+        """Fetch a remote change to the cell and notify local clients."""
+        if remote_path != self.remote_path:
+            return # Ignore attempts to change from other locations.
+        
+        # Get the data from the remote server.
+        # TODO: Security (MitM)? Might be handled by HTTPS
+        try:
+            url = urlparse(self.remote_path)
+            if url.scheme == 'http':
+                h = httplib.HTTPConnection(url.netloc)
+            elif url.scheme == 'https':
+                h = httplib.HTTPSConnection(url.netloc,
+                                            key_file=self.key,
+                                            cert_file=self.cert)
+            h.request('GET', url.path,
+                      headers={'Referer': self.referer})
+            resp = h.getresponse()
+            if resp.status == httplib.NOT_FOUND:
+                self.data = str(Undefined())
+            elif resp.status != httplib.OK:
+                # TODO: Handle errors
+                pass
+            else:
+                # This changes based on the input.
+                self.data = str(resp.read())
+            h.close()
+        except httplib.HTTPException:
+            # TODO: Handle errors
+            pass
+        
+        self.NewContentsSignal(self.data)
+    
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='', out_signature='s')
     def data(self):
@@ -433,6 +513,7 @@ class DPropMan(dbus.service.Object):
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
                          in_signature='s', out_signature='s')
     def escapePath(self, cellPath):
+        """[DBUS METHOD] Escape a cell path."""
         canonical = ''
         for char in cellPath:
             if ObjectPathRegexp.match(char):
@@ -535,51 +616,30 @@ class DPropMan(dbus.service.Object):
             # Get the next data the remote client should see.
             data, count = self.cells[cellPath].remoteData(client)
             if count > 0:
-                gobject.idle_add(lambda: self.cells[name].notifyNeighbors())
+                gobject.idle_add(lambda: self.cells[cellPath].notifyNeighbors())
             return data
         elif client is not None:
-            self.requestedCells[name] = self.requestedCells.get(name, [])
-            self.requestedCells[name].append(client)
+            self.requestedCells[cellPath] = self.requestedCells.get(cellPath,
+                                                                    [])
+            self.requestedCells[cellPath].append(client)
             return None
         elif cellPath in self.cells:
             return self.cells[cellPath].data
     
-    def fetchRemoteCell(self, name, remotePath):
-        url = urlparse(remotePath)
-        if self.useSSL:
-            referer = "https://%s:%d/RemoteCells/%s%s" % (
-                HostName, Port, url.netloc, url.path)
-        else:
-            referer = "http://%s:%d/RemoteCells/%s%s" % (
-                HostName, Port, url.netloc, url.path)
+    def addFetchRemoteThunk(self, cellPath, client):
+        """Adds a thunk for fetchRemoteCell for the given cell to the runtime
+        loop."""
+        if cellPath in self.cells:
+            gobject.idle_add(lambda: self.cells[cellPath].remoteMergeCell(client))
+        elif cellPath in self.remoteCells:
+            gobject.idle_add(lambda: self.remoteCells[cellPath].remoteChangeCell(client))
         
-        try:
-            if url.scheme == 'http':
-                h = httplib.HTTPConnection(url.netloc)
-            elif url.scheme == 'https':
-                h = httplib.HTTPSConnection(url.netloc, key_file='./server.pem', cert_file='./server.pem')
-            h.request('GET', url.path,
-                      headers={'Referer': referer})
-            resp = h.getresponse()
-            if resp.status != httplib.OK:
-                # TODO: Handle errors
-                pass
-            # This changes based on the input.
-            self.regNames[name].remoteChangeCell(resp.read())
-            h.close()
-        except httplib.HTTPException:
-            # TODO: Handle errors
-            pass
-        return False
-    
-    def gotRemoteCellChange(self, name, remotePath):
-        # Request new data for the local cell when we can.  Register
-        # the thunk now.
-        gobject.idle_add(lambda: self.fetchRemoteCell(name, remotePath))
-        
-    def gotRemoteCellDestroy(self, name, remotePath):
+    def gotRemoteCellDestroy(self, cellPath, client):
         # No longer interested in this cell's changes.
-        self.regNames[name].deleteNeighbor(remotePath)
+        if cellPath in self.cells:
+            self.cells[cellPath].deleteNeighbor(client)
+        elif cellPath in self.remoteCells:
+            self.remoteCells[cellPath].deleteNeighbor(client)
     
 class ServerContextFactory:
     """Generates the server SSL context."""

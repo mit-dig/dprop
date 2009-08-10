@@ -1,12 +1,9 @@
 import dbus, gobject, traceback, sys
 from dbus.mainloop.glib import DBusGMainLoop
 
-def change_signal_handler(raw_data):
+def new_contents_signal_handler(raw_data):
     data = raw_data
-    print "Got ChangeSignal (contents: %s)" % (data)
-    # We automatically merge changes by replacement.
-    cellman.changeCell(raw_data,
-                       dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
+    print "Got New Contents: %s" % (data)
 
 def destroy_signal_handler():
     print "Cell destroyed.  Cleaning up."
@@ -23,7 +20,7 @@ try:
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',
                              '/Cell%s' % (name))
     print "Data is %s" % (cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))
-    cellman.connect_to_signal('ChangeSignal', change_signal_handler,
+    cellman.connect_to_signal('NewContentsSignal', new_contents_signal_handler,
                               dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
     cellman.connect_to_signal('DestroySignal', destroy_signal_handler,
                               dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
