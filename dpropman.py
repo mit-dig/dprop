@@ -3,7 +3,9 @@
 import sys
 import socket
 import httplib
+import re
 from optparse import OptionParser
+from urlparse import urlparse
 
 import gobject
 import dbus, dbus.service
@@ -200,7 +202,7 @@ class Cell(dbus.service.Object):
                     pass
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
-                         in_signature='s')
+                         in_signature='s', out_signature='')
     def changeCell(self, data):
         """[DBUS METHOD] Locally change the cell's contents to data."""
         # TODO: Track update rate for remote cells.
@@ -212,7 +214,7 @@ class Cell(dbus.service.Object):
             self.notifyNeighbors()
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
-                         in_signature='s')
+                         in_signature='s', out_signature='')
     def mergeCell(self, data):
         """[DBUS METHOD] Locally attempt to merge the cell's contents with
         data."""
@@ -220,7 +222,7 @@ class Cell(dbus.service.Object):
         self.MergeContentsSignal(str(data))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
-                         out_signature='s')
+                         in_signature='', out_signature='s')
     def data(self):
         """[DBUS METHOD] Return the cell's data."""
         return self.data
@@ -348,7 +350,7 @@ class RemoteCell(Cell):
             self.NewContentsSignal(str(data))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
-                         in_signature='s')
+                         in_signature='s', out_signature='')
     def mergeCell(self, data):
         """[DBUS METHOD] Locally attempt to merge the cell's contents with
         data."""
@@ -376,7 +378,7 @@ class RemoteCell(Cell):
                 pass
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
-                         out_signature='s')
+                         in_signature='', out_signature='s')
     def data(self):
         """[DBUS METHOD] Return the cell's data."""
         return self.data
@@ -409,6 +411,8 @@ class RemoteCell(Cell):
 
     # TODO: Diff-tracking?
 
+ObjectPathRegexp = re.compile('[A-Za-z0-9/]')
+
 class DPropMan(dbus.service.Object):
     """The DProp manager.  Contains functions accessible by DBus."""
     
@@ -425,6 +429,17 @@ class DPropMan(dbus.service.Object):
         self.useSSL = useSSL
         self.cert = cert
         self.key = key
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan',
+                         in_signature='s', out_signature='s')
+    def escapePath(self, cellPath):
+        canonical = ''
+        for char in cellPath:
+            if ObjectPathRegexp.match(char):
+                canonical += char
+            else:
+                canonical += "_%02X" % (ord(char))
+        return canonical
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
                          in_signature='s', out_signature='')
@@ -469,15 +484,24 @@ class DPropMan(dbus.service.Object):
             # Balk at non-HTTP addresses.
             raise InvalidURLException(
                 'The remote cell URL %s is not a valid HTTP URL.' % (url))
-        cellPath = parsed_url.netloc + parsed_url.path
+        cellPath = self.escapePath('/' + parsed_url.netloc + parsed_url.path)
         
         # Register the remote cell and send out a query for it.
-        if cellPath not in self.remoteCells[cellPath]:
+        if cellPath not in self.remoteCells:
+            if self.useSSL:
+                referer = "https://%s:%d/Cells%s" % (self.hostname,
+                                                     self.port,
+                                                     cellPath)
+            else:
+                referer = "http://%s:%d/Cells%s" % (self.hostname,
+                                                    self.port,
+                                                    cellPath)
             self.remoteCells[cellPath] = RemoteCell(
                 self.conn,
                 cellPath,
                 "/RemoteCell%s" % (cellPath),
                 url,
+                referer,
                 self.cert,
                 self.key)
         self.remoteCells[cellPath].addNeighbor()
@@ -514,8 +538,8 @@ class DPropMan(dbus.service.Object):
                 gobject.idle_add(lambda: self.cells[name].notifyNeighbors())
             return data
         elif client is not None:
-            self.interestedCells[name] = self.interestedCells.get(name, [])
-            self.interestedCells[name].append(client)
+            self.requestedCells[name] = self.requestedCells.get(name, [])
+            self.requestedCells[name].append(client)
             return None
         elif cellPath in self.cells:
             return self.cells[cellPath].data

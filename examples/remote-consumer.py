@@ -13,14 +13,18 @@ def destroy_signal_handler():
 
 DBusGMainLoop(set_as_default=True)
 
-bus = dbus.SessionBus()
+bus = dbus.SystemBus()
 try:
     propman = bus.get_object('edu.mit.csail.dig.DPropMan',
-                             '/edu/mit/csail/dig/DPropMan')
-    name = propman.remoteCell('http://mr-burns.w3.org:37767/Cells/someName',
-                              dbus_interface='edu.mit.csail.dig.DPropMan')
+                             '/DPropMan')
+    name = '/mr-burns.w3.org:37767/Cells/edu/mit/csail/dig/DPropMan/Examples/Producer/cell'
+    url = "http:/%s" % (name)
+    name = str(propman.escapePath(name,
+                                  dbus_interface='edu.mit.csail.dig.DPropMan'))
+    propman.registerRemoteCell(url,
+                               dbus_interface='edu.mit.csail.dig.DPropMan')
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',
-                             '/edu/mit/csail/dig/DPropMan/RemoteCells/%s' % (name))
+                             '/RemoteCell%s' % (name))
     print "Data is %s" % (cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))
     cellman.connect_to_signal('ChangeSignal', change_signal_handler,
                               dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
