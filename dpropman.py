@@ -1,11 +1,17 @@
 #!/usr/bin/env python
 
+import sys
 import socket
+import httplib
 from optparse import OptionParser
 
 import gobject
 import dbus, dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
+import twisted.internet.glib2reactor
+if __name__ == '__main__':
+    twisted.internet.glib2reactor.install()
+from twisted.web.error import NoResource
 from twisted.web.resource import Resource
 from twisted.web.server import Site as TwistedSite
 from twisted.internet.reactor import listenTCP, listenSSL
@@ -46,7 +52,7 @@ class DPropManCell(Resource):
         return data
     
     def render_POST(self, request):
-        if request.args['hash'][0] != makeETag(self.dpropman.cells[self.path].data()):
+        if request.args['hash'][0] != makeETag(self.dpropman.cells[self.path].data):
             self.dpropman.gotRemoteCellChange(
                 self.path,
                 request.getHeader('Referer'))
@@ -74,7 +80,7 @@ class DPropManCells(Resource):
         self.dpropman = dpropman
     
     def getChild(self, path, request):
-        path = '/'.join([path] + request.postpath)
+        path = '/' + '/'.join([path] + request.postpath)
         if path in self.dpropman.cells or path in self.dpropman.remoteCells:
             return DPropManCell(self.dpropman, path)
         elif path == '':
@@ -507,12 +513,12 @@ class DPropMan(dbus.service.Object):
             if count > 0:
                 gobject.idle_add(lambda: self.cells[name].notifyNeighbors())
             return data
-        elif remotePath is not None:
+        elif client is not None:
             self.interestedCells[name] = self.interestedCells.get(name, [])
-            self.interestedCells[name].append(remotePath)
+            self.interestedCells[name].append(client)
             return None
         elif cellPath in self.cells:
-            return self.cells[cellPath].data()
+            return self.cells[cellPath].data
     
     def fetchRemoteCell(self, name, remotePath):
         url = urlparse(remotePath)
