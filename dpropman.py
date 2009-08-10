@@ -44,7 +44,10 @@ class DPropManCell(Resource):
     def render_GET(self, request):
         # Register interest to notify the next time this cell changes.
         if self.path in self.dpropman.remoteCells:
-            return ""
+            data = self.dpropman.remoteCells[self.path].remoteData(request.getHeader('Referer'))
+            if data[1] > 0:
+                self.dpropman.remoteCells[self.path].notifyRemote()
+            return str(data[0])
         if self.dpropman.useSSL:
             cert = request.channel.transport.getPeerCertificate()
         data = self.dpropman.remoteFetchCell(
@@ -365,6 +368,9 @@ class RemoteCell(Cell):
             # TODO: Handle errors
             pass
         
+        self.merge_data = []
+        self.notified_remote = False
+        
         # TODO: Spawn refresh timer to determine if we need to manage
         # refreshes (in case we're behind a NAT).  Note that the way
         # we manage this is by first assuming that the remote cell
@@ -389,20 +395,11 @@ class RemoteCell(Cell):
         """[DBUS SIGNAL] Signals the destruction of the cell."""
         pass
     
-    def changeCell(self, data):
-        """Locally change the cell's contents to data."""
-        # TODO: Track update rate for remote cells.
-        if self.data != str(data):
-            self.data = str(data)
-            self.NewContentsSignal(str(data))
-    
-    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
-                         in_signature='s', out_signature='')
-    def mergeCell(self, data):
-        """[DBUS METHOD] Locally attempt to merge the cell's contents with
-        data."""
-        if self.data != str(data):
-            # Need to forward the change along to the remote cell.
+    def notifyRemote(self):
+        """Notify the remote cell of any data to be merged."""
+        # TODO: Why not?
+        # Need to forward the change along to the remote cells.
+        if not self.notified_remote and len(self.merge_data) > 0:
             try:
                 url = urlparse(self.remote_path)
                 if url.scheme == 'http':
@@ -411,18 +408,36 @@ class RemoteCell(Cell):
                     h = httplib.HTTPSConnection(url.netloc,
                                                 key_file=self.key,
                                                 cert_file=self.cert)
+                # TODO: Is POST satisfactory?
                 h.request('POST', url.path,
-                          urllib.urlencode({'hash': makeETag(self.data)}),
+                          urllib.urlencode({'hash': makeETag(self.merge_data[0])}),
                           {'Referer': self.referer,
                            'Content-Type': 'application/x-www-form-urlencoded'})
+                # TODO: If cells are remote cells?
                 resp = h.getresponse()
-                if resp.status != httplib.ACCEPTED:
+                if resp.status == httplib.NOT_MODIFIED:
+                    self.merge_data.pop(0)
+                elif resp.status != httplib.ACCEPTED:
                     # TODO: Handle errors
                     pass
                 h.close()
+                if resp.status == httplib.ACCEPTED:
+                    self.notified_remote = True
             except httplib.HTTPException:
-                # TODO: Handle errors
+                # TODO: Handle exceptions
                 pass
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='s', out_signature='')
+    def mergeCell(self, data):
+        """[DBUS METHOD] Locally attempt to merge the cell's contents with
+        data.  We do this by appending the data to the list of data to
+        merge remotely, and then notify the remote cell if we haven't."""
+        if self.data != str(data):
+            if len(self.merge_data) == 0 or self.merge_data[-1] != str(data):
+                self.merge_data.append(data)
+                if not self.notified_remote:
+                    self.notifyRemote()
     
     def remoteChangeCell(self, remote_path):
         """Fetch a remote change to the cell and notify local clients."""
@@ -463,6 +478,17 @@ class RemoteCell(Cell):
         """[DBUS METHOD] Return the cell's data."""
         return self.data
 
+    def remoteData(self, neighbor):
+        """Return the next data a particular neighbor should see and the
+        number of changes still remaining.."""
+        if neighbor == self.remote_path and len(self.merge_data) > 0:
+            self.notified_remote = False
+            return self.merge_data.pop(0), len(self.merge_data)
+        elif neighbor == self.remote_path:
+            return self.data, 0
+        else:
+            return "", 0
+    
     def destroy(self):
         """Destroy the cell locally."""
         self.DestroySignal()
