@@ -1,16 +1,14 @@
-import gobject, traceback, sys, urllib, httplib, socket, re, sys
-from urlparse import urlparse
+#!/usr/bin/env python
+
+import socket
+from optparse import OptionParser
+
+import gobject
 import dbus, dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
-import twisted.internet.glib2reactor
-if __name__ == '__main__':
-    twisted.internet.glib2reactor.install()
 from twisted.web.resource import Resource
-from optparse import OptionParser
 from twisted.web.server import Site as TwistedSite
-from twisted.internet.reactor import listenSSL, listenTCP
-import twisted.web.resource, twisted.internet.reactor, twisted.web.server, twisted.internet.defer, twisted.web.error
-import OpenSSL.SSL
+from twisted.internet.reactor import listenTCP, listenSSL
 
 def makeETag(data):
     """Generate an ETag."""
@@ -423,7 +421,7 @@ class DPropMan(dbus.service.Object):
         self.key = key
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
-                         in_signature='s')
+                         in_signature='s', out_signature='')
     def registerCell(self, cellPath):
         """[DBUS METHOD] Registers a new cell under the given cell path if it
         does not yet exist.  Otherwise, registers interest in the cell."""
@@ -438,7 +436,7 @@ class DPropMan(dbus.service.Object):
                                                     cellPath)
             self.cells[cellPath] = Cell(self.conn,
                                         cellPath,
-                                        "/edu/mit/csail/dig/DPropMan/Cells/%s" %
+                                        "/Cell%s" %
                                         (cellPath),
                                         referer,
                                         self.cert,
@@ -454,7 +452,7 @@ class DPropMan(dbus.service.Object):
         self.cells[cellPath].addNeighbor()
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
-                         in_signature='s')
+                         in_signature='s', out_signature='')
     def registerRemoteCell(self, url):
         """[DBUS METHOD] Registers interest in a cell on a remote server at
         the given URL."""
@@ -472,14 +470,14 @@ class DPropMan(dbus.service.Object):
             self.remoteCells[cellPath] = RemoteCell(
                 self.conn,
                 cellPath,
-                "/edu/mit/csail/dig/DPropMan/RemoteCells/%s" % (cellPath),
+                "/RemoteCell%s" % (cellPath),
                 url,
                 self.cert,
                 self.key)
         self.remoteCells[cellPath].addNeighbor()
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
-                         in_signature='s')
+                         in_signature='s', out_signature='')
     def unregisterCell(self, cellPath):
         """[DBUS METHOD] Unregisters interest in a cell."""
         # TODO: Notify remote cells that we don't exist any more.
@@ -594,8 +592,8 @@ def main():
     # First, set up the DBus connection.
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
-#    name = dbus.service.BusName('edu.mit.csail.dig.DPropMan', bus)
-    dpropman = DPropMan(bus, '/edu/mit/csail/dig/DPropMan', port, hostname,
+    name = dbus.service.BusName('edu.mit.csail.dig.DPropMan', bus)
+    dpropman = DPropMan(bus, '/DPropMan', port, hostname,
                         useSSL, options.cert, options.key)
     
     # Second, set up the server for remote connections.

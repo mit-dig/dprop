@@ -10,14 +10,15 @@ def emit_signal():
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
-bus = dbus.SessionBus()
+bus = dbus.SystemBus()
 try:
     propman = bus.get_object('edu.mit.csail.dig.DPropMan',
-                             '/edu/mit/csail/dig/DPropMan')
-    name = propman.registerCell('someName',
-                                dbus_interface='edu.mit.csail.dig.DPropMan')
+                             '/DPropMan')
+    name = '/edu/mit/csail/dig/DPropMan/Examples/Producer/cell'
+    propman.registerCell(name,
+                         dbus_interface='edu.mit.csail.dig.DPropMan')
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',
-                             '/edu/mit/csail/dig/DPropMan/Cells/%s' % (name))
+                             '/Cell%s' % (name))
 except dbus.DBusException:
     traceback.print_exc()
 #    print usage
