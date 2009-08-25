@@ -1,9 +1,11 @@
 import dbus, gobject, traceback, sys
 from dbus.mainloop.glib import DBusGMainLoop
 
+import dpropjson
+
 def new_contents_signal_handler(raw_data):
-    data = raw_data
-    print "Received New Contents: %s" % (data)
+    data = dpropjson.loads(raw_data)
+    print "Received New Contents: %s" % (`data`)
 
 def destroy_signal_handler():
     print "Cell destroyed.  Cleaning up."
@@ -22,7 +24,7 @@ try:
                                dbus_interface='edu.mit.csail.dig.DPropMan')
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',
                              '/RemoteCell%s' % (name))
-    print "Data is %s" % (cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))
+    print "Data is %s" % (`dpropjson.loads(cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))`)
     cellman.connect_to_signal('NewContentsSignal', new_contents_signal_handler,
                               dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
     cellman.connect_to_signal('DestroySignal', destroy_signal_handler,

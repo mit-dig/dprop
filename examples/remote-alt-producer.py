@@ -1,7 +1,9 @@
 import dbus, gobject, traceback, sys, dbus.service, dbus.mainloop.glib
 
+import dpropjson
+
 def emit_signal():
-    cellman.mergeCell('remote-alt-producer.py',
+    cellman.mergeCell(dpropjson.dumps('remote-alt-producer.py'),
                       dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
     
     gobject.timeout_add(2000, emit_signal)

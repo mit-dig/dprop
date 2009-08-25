@@ -18,6 +18,20 @@ from twisted.web.error import NoResource
 from twisted.web.resource import Resource
 from twisted.web.server import Site as TwistedSite
 from twisted.internet.reactor import listenTCP, listenSSL
+import OpenSSL.SSL
+import netifaces
+
+from dpropjson import Undefined
+
+def ipAddresses():
+    addrs = []
+    for iface in netifaces.interfaces():
+        ifaddrs = netifaces.ifaddresses(iface)
+        for type in ifaddrs:
+            for item in ifaddrs[type]:
+                if 'addr' in item:
+                    addrs.append(item['addr'])
+    return addrs
 
 def makeETag(data):
     """Generate an ETag."""
@@ -25,6 +39,10 @@ def makeETag(data):
         return "%08X" % (hash(data) + 2 * (sys.maxint + 1))
     else:
         return "%08X" % (hash(data))
+
+def formatCertName(cert):
+    """Generate the string for the given X509Name."""
+    return "/C=%s/ST=%s/L=%s/O=%s/OU=%s/CN=%s/emailAddress=%s" % (cert.C, cert.ST, cert.L, cert.O, cert.OU, cert.CN, cert.emailAddress)
 
 class DPropManCell(Resource):
     """HTTP resource representing a single cell."""
@@ -43,18 +61,22 @@ class DPropManCell(Resource):
     
     def render_GET(self, request):
         # Register interest to notify the next time this cell changes.
+        if self.dpropman.useSSL:
+            cert = request.channel.transport.getPeerCertificate()
         if self.path in self.dpropman.remoteCells:
             data = self.dpropman.remoteCells[self.path].remoteData(request.getHeader('Referer'))
             if data[1] > 0:
                 self.dpropman.remoteCells[self.path].notifyRemote()
             return str(data[0])
-        if self.dpropman.useSSL:
-            cert = request.channel.transport.getPeerCertificate()
         data = self.dpropman.remoteFetchCell(
             self.path,
             request.getHeader('Referer'))
         if isinstance(data, NoResource):
             return data
+        if self.dpropman.cells[self.path].accessForCert(cert) == 'r':
+            request.setHeader('X-Access', 'read')
+        elif self.dpropman.cells[self.path].accessForCert(cert) == 'w':
+            request.setHeader('X-Access', 'write')
         request.setResponseCode(httplib.OK)
         request.setETag(makeETag(data))
         return data
@@ -150,10 +172,9 @@ class NonExistantCellPathException(dbus.DBusException):
     """No cell with the given path exists."""
     _dbus_error_name = 'edu.mit.csail.dig.DPropMan.InvalidURLException'
 
-class Undefined():
-    """Undefined value."""
-    def __str__(self):
-        return '<undefined/>'
+class BadAccessTypeException(dbus.DBusException):
+    """The access type provided was not recognized."""
+    _dbus_error_name = 'edu.mit.csail.dig.DPropMan.BadAccessTypeException'
 
 class Cell(dbus.service.Object):
     """A local cell in a propagator network."""
@@ -168,6 +189,8 @@ class Cell(dbus.service.Object):
         self.neighborCount = 0
         self.cert = cert
         self.key = key
+        self.readAccess = set()
+        self.writeAccess = set()
         dbus.service.Object.__init__(self, conn, object_path)
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
@@ -277,6 +300,26 @@ class Cell(dbus.service.Object):
         """[DBUS METHOD] Return the cell's data."""
         return self.data
     
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='ass', out_signature='')
+    def grantAccessTo(self, certs, accessType):
+        """[DBUS METHOD] Grant remote access of type accessType to a cell to
+        people bearing any of the provided certificates."""
+        if accessType == 'r':
+            # Read Access
+            for cert in certs:
+                self.readAccess.add(cert)
+        elif accessType == 'w':
+            # Read/Write Access
+            for cert in certs:
+                self.writeAccess.add(cert)
+            for cert in certs:
+                if cert in self.readAccess:
+                    self.readAccess.remove(cert)
+        else:
+            raise BadAccessTypeException(
+                "Don't understand access type '%s'" % (accessType))
+    
     def remoteData(self, neighbor):
         """Return the next data a particular neighbor should see and the
         number of changes still remaining.."""
@@ -285,6 +328,23 @@ class Cell(dbus.service.Object):
             return self.neighbors[neighbor]['data'].pop(0), len(self.neighbors[neighbor]['data'])
         else:
             return self.data, 0
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='s')
+    def accessType(self):
+        """[DBUS METHOD] Return the type of access granted (always 'w' for
+        local cells)."""
+        return 'w'
+    
+    def accessForCert(self, cert):
+        """Return the type of access granted to the certificate provided."""
+        cert = formatCertName(cert.get_subject())
+        if cert in self.readAccess:
+            return 'r'
+        elif cert in self.writeAccess:
+            return 'w'
+        else:
+            return ''
     
     def addNeighbor(self, neighbor=None):
         """Add a new neighbor."""
@@ -325,6 +385,12 @@ class Cell(dbus.service.Object):
                 # TODO: Handle exceptions
                 pass
     
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='b')
+    def exists(self):
+        """[DBUS METHOD] A hack to test for a claim on a cell."""
+        return True
+    
     def destroy(self):
         """Destroy the cell."""
         self.DestroySignal()
@@ -355,6 +421,7 @@ class RemoteCell(Cell):
             h.request('GET', url.path,
                       headers={'Referer': self.referer})
             resp = h.getresponse()
+            self.access = ''
             if resp.status == httplib.NOT_FOUND:
                 self.data = str(Undefined())
             elif resp.status != httplib.OK:
@@ -363,6 +430,7 @@ class RemoteCell(Cell):
             else:
                 # This changes based on the input.
                 self.data = str(resp.read())
+                self.access = resp.getHeader('X-Access', '')
             h.close()
         except httplib.HTTPException:
             # TODO: Handle errors
@@ -489,6 +557,19 @@ class RemoteCell(Cell):
         else:
             return "", 0
     
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='s')
+    def accessType(self):
+        """[DBUS METHOD] Return the type of access granted to the certificate
+        provided."""
+        return self.access
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='b')
+    def exists(self):
+        """[DBUS METHOD] A hack to test for a claim on a cell."""
+        return True
+    
     def destroy(self):
         """Destroy the cell locally."""
         self.DestroySignal()
@@ -580,7 +661,7 @@ class DPropMan(dbus.service.Object):
         self.cells[cellPath].addNeighbor()
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
-                         in_signature='s', out_signature='')
+                         in_signature='s', out_signature='s')
     def registerRemoteCell(self, url):
         """[DBUS METHOD] Registers interest in a cell on a remote server at
         the given URL."""
@@ -591,6 +672,7 @@ class DPropMan(dbus.service.Object):
             # Balk at non-HTTP addresses.
             raise InvalidURLException(
                 'The remote cell URL %s is not a valid HTTP URL.' % (url))
+        # Is the remote client us?
         cellPath = self.escapePath('/' + parsed_url.netloc + parsed_url.path)
         
         # Register the remote cell and send out a query for it.
@@ -603,15 +685,22 @@ class DPropMan(dbus.service.Object):
                 referer = "http://%s:%d/Cells%s" % (self.hostname,
                                                     self.port,
                                                     cellPath)
-            self.remoteCells[cellPath] = RemoteCell(
-                self.conn,
-                cellPath,
-                "/RemoteCell%s" % (cellPath),
-                url,
-                referer,
-                self.cert,
-                self.key)
+            if parsed_url.netloc in map(lambda x: '%s:%d' % (x, self.port),
+                                        ipAddresses()):
+                if parsed_url.path[6:] in self.cells:
+                    self.cells[parsed_url.path[6:]].addNeighbor()
+                    return '/Cell' + parsed_url.path[6:]
+            else:
+                self.remoteCells[cellPath] = RemoteCell(
+                    self.conn,
+                    cellPath,
+                    "/RemoteCell%s" % (cellPath),
+                    url,
+                    referer,
+                    self.cert,
+                    self.key)
         self.remoteCells[cellPath].addNeighbor()
+        return cellPath
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
                          in_signature='s', out_signature='')
@@ -703,7 +792,7 @@ def main():
     (options, args) = parser.parse_args()
     port = int(options.port)
     hostname = socket.getfqdn()
-    useSSL = False
+    useSSL = True
     
     # First, set up the DBus connection.
     DBusGMainLoop(set_as_default=True)

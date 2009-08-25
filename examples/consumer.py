@@ -1,16 +1,18 @@
 import dbus, gobject, traceback, sys
 from dbus.mainloop.glib import DBusGMainLoop
 
+import dpropjson
+
 def new_contents_signal_handler(raw_data):
-    data = raw_data
-    print "Got New Contents: %s" % (data)
+    data = dpropjson.loads(raw_data)
+    print "Got New Contents: %s" % (`data`)
 
 def merge_contents_signal_handler(raw_data):
-    data = raw_data
-    print "Got Merge Contents: %s" % (data)
-    cellman.changeCell(data,
+    data = dpropjson.loads(raw_data)
+    print "Got Merge Contents: %s" % (`data`)
+    cellman.changeCell(raw_data,
                        dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
-    print "Set to '%s'" % (data)
+    print "Set to %s" % (`data`)
 
 def destroy_signal_handler():
     print "Cell destroyed.  Cleaning up."
@@ -26,7 +28,7 @@ try:
                          dbus_interface='edu.mit.csail.dig.DPropMan')
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',
                              '/Cell%s' % (name))
-    print "Data is %s" % (cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))
+    print "Data is %s" % (`dpropjson.loads(cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))`)
     cellman.connect_to_signal('NewContentsSignal', new_contents_signal_handler,
                               dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
     cellman.connect_to_signal('MergeContentsSignal', merge_contents_signal_handler,
