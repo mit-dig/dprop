@@ -630,6 +630,19 @@ class DPropMan(dbus.service.Object):
         return canonical
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
+                         in_signature='', out_signature='b')
+    def useSSL(self):
+        """[DBUS METHOD] Returns True if this DPropMan daemon is using SSL."""
+        return self.useSSL
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan',
+                         in_signature='', out_signature='i')
+    def port(self):
+        """[DBUS METHOD] Returns the port this DPropMan instance is running
+        on."""
+        return self.port
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan',
                          in_signature='s', out_signature='')
     def registerCell(self, cellPath):
         """[DBUS METHOD] Registers a new cell under the given cell path if it
@@ -789,10 +802,13 @@ def main():
     parser.add_option('-k', '--key', dest='key',
                       help='set private key file [default: %default]',
                       default='./server.pem')
+    parser.add_option('-s', '--no-ssl', dest='ssl', action="store_false",
+                      help='do not use SSL',
+                      default=True)
     (options, args) = parser.parse_args()
     port = int(options.port)
     hostname = socket.getfqdn()
-    useSSL = True
+    useSSL = options.ssl
     
     # First, set up the DBus connection.
     DBusGMainLoop(set_as_default=True)
