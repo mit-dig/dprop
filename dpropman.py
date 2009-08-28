@@ -698,20 +698,27 @@ class DPropMan(dbus.service.Object):
                 referer = "http://%s:%d/Cells%s" % (self.hostname,
                                                     self.port,
                                                     cellPath)
-            if parsed_url.netloc in map(lambda x: '%s:%d' % (x, self.port),
-                                        ipAddresses()):
-                if parsed_url.path[6:] in self.cells:
-                    self.cells[parsed_url.path[6:]].addNeighbor()
-                    return '/Cell' + parsed_url.path[6:]
-            else:
-                self.remoteCells[cellPath] = RemoteCell(
-                    self.conn,
-                    cellPath,
-                    "/RemoteCell%s" % (cellPath),
-                    url,
-                    referer,
-                    self.cert,
-                    self.key)
+            
+            try:
+                ips = socket.gethostbyname_ex(self.hostname)
+            except:
+                pass
+            for ip in ips[2]:
+                ip += ':%d' % (self.port)
+                
+                if ip in map(lambda x: '%s:%d' % (x, self.port),
+                             ipAddresses()):
+                    if parsed_url.path[6:] in self.cells:
+                        self.cells[parsed_url.path[6:]].addNeighbor()
+                        return '/Cell' + parsed_url.path[6:]
+            self.remoteCells[cellPath] = RemoteCell(
+                self.conn,
+                cellPath,
+                "/RemoteCell%s" % (cellPath),
+                url,
+                referer,
+                self.cert,
+                self.key)
         self.remoteCells[cellPath].addNeighbor()
         return cellPath
     
