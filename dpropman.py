@@ -61,6 +61,7 @@ class DPropManCell(Resource):
     
     def render_GET(self, request):
         # Register interest to notify the next time this cell changes.
+        cert = False
         if self.dpropman.useSSL:
             cert = request.channel.transport.getPeerCertificate()
         if self.path in self.dpropman.remoteCells:
@@ -77,12 +78,21 @@ class DPropManCell(Resource):
             request.setHeader('X-Access', 'read')
         elif self.dpropman.cells[self.path].accessForCert(cert) == 'w':
             request.setHeader('X-Access', 'write')
+        else:
+            request.setResponseCode(httplib.FORBIDDEN)
+            return ""
         request.setResponseCode(httplib.OK)
         request.setETag(makeETag(data))
         return data
     
     def render_POST(self, request):
+        cert = False
+        if self.dpropman.useSSL:
+            cert = request.channel.transport.getPeerCertificate()
         if self.path in self.dpropman.cells and request.args['hash'][0] != makeETag(self.dpropman.cells[self.path].data):
+            if self.dpropman.cells[self.path].accessForCert(cert) != 'w':
+                request.setResponseCode(httplib.FORBIDDEN)
+                return ""
             self.dpropman.addFetchRemoteThunk(
                 self.path,
                 request.getHeader('Referer'))
@@ -90,6 +100,9 @@ class DPropManCell(Resource):
             request.setETag(makeETag(self.dpropman.cells[self.path].data))
             return self.dpropman.cells[self.path].data
         elif self.path in self.dpropman.remoteCells and request.args['hash'][0] != makeETag(self.dpropman.remoteCells[self.path].data):
+            if self.dpropman.remoteCells[self.path].accessForCert(cert) != 'w':
+                request.setResponseCode(httplib.FORBIDDEN)
+                return ""
             self.dpropman.addFetchRemoteThunk(
                 self.path,
                 request.getHeader('Referer'))
@@ -341,7 +354,8 @@ class Cell(dbus.service.Object):
         cert = formatCertName(cert.get_subject())
         if cert in self.readAccess:
             return 'r'
-        elif cert in self.writeAccess:
+        elif cert in self.writeAccess or cert == False:
+            # TODO: Actually test for UseSSL.
             return 'w'
         else:
             return ''
@@ -431,6 +445,8 @@ class RemoteCell(Cell):
                 # This changes based on the input.
                 self.data = str(resp.read())
                 self.access = resp.getHeader('X-Access', '')
+                # TODO: set grantAccessTo to the certificate gotten
+                # from the server here.
             h.close()
         except httplib.HTTPException:
             # TODO: Handle errors
