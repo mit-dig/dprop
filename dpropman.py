@@ -22,6 +22,7 @@ import OpenSSL.SSL
 import netifaces
 
 from dpropjson import Undefined
+import dpropjson
 
 def ipAddresses():
     addrs = []
@@ -197,7 +198,7 @@ class Cell(dbus.service.Object):
         self.object_path = object_path
         self.referer = referer
         self.name = name
-        self.data = str(Undefined())
+        self.data = dpropjson.dumps(Undefined())
         self.neighbors = {}
         self.neighborCount = 0
         self.cert = cert
@@ -292,7 +293,7 @@ class Cell(dbus.service.Object):
                       headers={'Referer': self.referer})
             resp = h.getresponse()
             if resp.status == httplib.NOT_FOUND:
-                data = str(Undefined())
+                data = dpropjson.dumps(Undefined())
             elif resp.status != httplib.OK:
                 # TODO: Handle errors
                 pass
@@ -437,7 +438,7 @@ class RemoteCell(Cell):
             resp = h.getresponse()
             self.access = ''
             if resp.status == httplib.NOT_FOUND:
-                self.data = str(Undefined())
+                self.data = dpropjson.dumps(Undefined())
             elif resp.status != httplib.OK:
                 # TODO: Handle errors
                 pass
@@ -542,7 +543,7 @@ class RemoteCell(Cell):
                       headers={'Referer': self.referer})
             resp = h.getresponse()
             if resp.status == httplib.NOT_FOUND:
-                self.data = str(Undefined())
+                self.data = dpropjson.dumps(Undefined())
             elif resp.status != httplib.OK:
                 # TODO: Handle errors
                 pass
