@@ -241,7 +241,7 @@ class DPropManCell(Resource):
         
         # If so, forward the update to the cell so it can do the merge.
         pdebug("PUT was ACCEPTED! Forwarding Update!")
-        cell.UpdateSignal(request.args['data'], False)
+        cell.doUpdate(request.args['data'], False)
         
         # And let the client know that it was accepted.
         request.setResponseCode(httplib.ACCEPTED)
@@ -342,14 +342,20 @@ class Cell(dbus.service.Object):
         self.peers = {}
         self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
         dbus.service.Object.__init__(self, conn, object_path)
-    
-    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def UpdateSignal(self, message, isLocal):
-        """[DBUS SIGNAL] Signals a requested update in the cell's content."""
+        
+    def doUpdate(self, message, isLocal):
+        """Handles sending out an update signal and then maybe updating
+        peers."""
         # Push the update along if it was a local update attempt.
         pdebug("%s sending out UpdateSignal" % (self.uuid))
+        self.UpdateSignal(message)
         if isLocal:
             self.updatePeers(message)
+    
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def UpdateSignal(self, message):
+        """[DBUS SIGNAL] Signals a requested update in the cell's content."""
+        pass
     
 #    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
 #    def NewContentsSignal(self, message):
@@ -422,7 +428,7 @@ class Cell(dbus.service.Object):
         """[DBUS METHOD] Locally attempt to update the cell's contents with
         data."""
         pdebug("%s received updateCell() call" % (self.uuid))
-        self.UpdateSignal(str(data), True)
+        self.doUpdate(str(data), True)
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='', out_signature='s')
@@ -501,7 +507,7 @@ class Cell(dbus.service.Object):
                         if resp.status == httplib.OK:
                             # Got a response.  Time to merge.
                             pdebug("Got new data in sync. Merging...")
-                            self.UpdateSignal(resp.read(), False)
+                            self.doUpdate(resp.read(), False)
                         elif resp.status == httplib.NOT_MODIFIED:
                             pdebug("Sync resulted in no new data.")
                         else:
@@ -580,7 +586,7 @@ class Cell(dbus.service.Object):
                 
                 # Send the response out for a local merge.
                 pdebug("Performing merge...")
-                self.UpdateSignal(resp.read(), False)
+                self.doUpdate(resp.read(), False)
                 
                 pdebug("Performing initial peers sync.")
                 h.request('GET', url.path + '/Peers', {'Referer': self.referer})
