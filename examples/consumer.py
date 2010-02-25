@@ -23,12 +23,13 @@ bus = dbus.SystemBus()
 try:
     propman = bus.get_object('edu.mit.csail.dig.DPropMan',
                              '/DPropMan')
-    name = '/edu/mit/csail/dig/DPropMan/Examples/Producer/cell'
-    propman.registerCell(name,
-                         dbus_interface='edu.mit.csail.dig.DPropMan')
+    uuid = 'c470a053-c59d-4133-80fd-e9b65c0659d3'
+    uuid = propman.registerCell(uuid,
+                                dbus_interface='edu.mit.csail.dig.DPropMan')
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',
-                             '/Cell%s' % (name))
-    print "Data is %s" % (`dpropjson.loads(cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))`)
+                             '/Cells/%s' % (uuid))
+    print "JSON is %s" % (cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell'))
+    print "Data is %s" % (`dpropjson.loads(str(cellman.data(dbus_interface='edu.mit.csail.dig.DPropMan.Cell')))`)
     cellman.connect_to_signal('NewContentsSignal', new_contents_signal_handler,
                               dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
     cellman.connect_to_signal('MergeContentsSignal', merge_contents_signal_handler,
