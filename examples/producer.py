@@ -16,11 +16,11 @@ bus = dbus.SystemBus()
 try:
     propman = bus.get_object('edu.mit.csail.dig.DPropMan',
                              '/DPropMan')
-    name = '/edu/mit/csail/dig/DPropMan/Examples/Producer/cell'
-    propman.registerCell(name,
-                         dbus_interface='edu.mit.csail.dig.DPropMan')
+    uuid = 'c470a053-c59d-4133-80fd-e9b65c0659d3'
+    uuid = propman.registerCell(uuid,
+                                dbus_interface='edu.mit.csail.dig.DPropMan')
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',
-                             '/Cell%s' % (name))
+                             '/Cells/%s' % (uuid))
 except dbus.DBusException:
     traceback.print_exc()
 #    print usage

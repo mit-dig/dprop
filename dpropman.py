@@ -21,7 +21,7 @@ from twisted.internet.reactor import listenTCP, listenSSL
 import OpenSSL.SSL
 import netifaces
 
-from dpropjson import Undefined
+from dpropjson import Nothing
 import dpropjson
 
 SYNC_INTERVAL = 30000
@@ -740,7 +740,7 @@ class DPropMan(dbus.service.Object):
             # TODO: Should this use something other than UUID1 in the future?
             uuid = str(uuid1()).replace('-', '')
         else:
-            uuid = self.escapePath(uuid)
+            uuid = self.escapePath(uuid.replace('-', ''))
         
         if uuid not in self.cells:
             if self.useSSL:

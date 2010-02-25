@@ -3,8 +3,9 @@ import json
 if 'JSONEncoder' not in json.__dict__:
     from types import DictType, ListType
 
-class Undefined:
-    """A value is undefined (this is prior to explicitly setting the value)."""
+class Nothing:
+    """Nothing is known of a value (this is prior to explicitly setting 
+    the value)."""
     pass
 
 class URI:
@@ -15,24 +16,24 @@ class URI:
 if 'JSONEncoder' in json.__dict__:
     class DPropEncoder(json.JSONEncoder):
         def default(self, obj):
-            if isinstance(obj, Undefined):
-                return {'__undefined__': True}
+            if isinstance(obj, Nothing):
+                return {'__nothing__': True}
             elif isinstance(obj, URI):
                 return {'__uri__': True,
                         'uri': obj.value}
             return json.JSONEncoder.default(self, obj)
 else:
     def DPropEncode(obj):
-        if isinstance(obj, Undefined):
-            return {'__undefined__': True}
+        if isinstance(obj, Nothing):
+            return {'__nothing__': True}
         elif isinstance(obj, URI):
             return {'__uri__': True,
                     'uri': obj.value}
         return obj
 
 def DPropDecode(dct):
-    if '__undefined__' in dct:
-        return Undefined()
+    if '__nothing__' in dct:
+        return Nothing()
     elif '__uri__' in dct:
         return URI(dct['uri'])
     return dct
