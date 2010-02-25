@@ -343,6 +343,18 @@ class Cell(dbus.service.Object):
         self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
         dbus.service.Object.__init__(self, conn, object_path)
         
+    @dbus.service.method('edu.mit.csail.dig.DPropMan',
+                         in_signature='s', out_signature='s')
+    def escapePath(self, cellPath):
+        """[DBUS METHOD] Escape a cell path."""
+        canonical = ''
+        for char in cellPath:
+            if ObjectPathRegexp.match(char):
+                canonical += char
+            else:
+                canonical += "_%02X" % (ord(char))
+        return canonical
+    
     def doUpdate(self, message, isLocal):
         """Handles sending out an update signal and then maybe updating
         peers."""
@@ -569,16 +581,16 @@ class Cell(dbus.service.Object):
         
         try:
             parsed_url = urlparse(url)
-            if url.scheme == 'http':
-                h = httplib.HTTPConnection(url.netloc)
-            elif url.scheme == 'https':
+            if parsed_url.scheme == 'http':
+                h = httplib.HTTPConnection(parsed_url.netloc)
+            elif parsed_url.scheme == 'https':
                 # TODO: Is it safe to keep these keys and
                 # certs around???
-                h = httplib.HTTPSConnection(url.netloc,
+                h = httplib.HTTPSConnection(parsed_url.netloc,
                                             key_file=self.key,
                                             cert_file=self.cert)
                 pdebug("Performing initial data sync.")
-                h.request('GET', url.path, {'Referer': self.referer})
+                h.request('GET', parsed_url.path, {'Referer': self.referer})
                 resp = h.getresponse()
                 if resp.status != httplib.OK:
                     # TODO: Handle errors
@@ -589,7 +601,7 @@ class Cell(dbus.service.Object):
                 self.doUpdate(resp.read(), False)
                 
                 pdebug("Performing initial peers sync.")
-                h.request('GET', url.path + '/Peers', {'Referer': self.referer})
+                h.request('GET', parsed_url.path + '/Peers', {'Referer': self.referer})
                 resp = h.getresponse()
                 if resp.status != httplib.OK:
                     # TODO: Handle errors
