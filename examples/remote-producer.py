@@ -17,7 +17,7 @@ try:
     propman = bus.get_object('edu.mit.csail.dig.DPropMan',
                              '/DPropMan')
     name = '/mr-burns.w3.org:37767/Cells/c470a053c59d413380fde9b65c0659d3'
-    url = "http:/%s" % (name)
+    url = "https:/%s" % (name)
     uuid = propman.registerRemoteCell(url,
                                       dbus_interface='edu.mit.csail.dig.DPropMan')
     cellman = bus.get_object('edu.mit.csail.dig.DPropMan',

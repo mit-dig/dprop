@@ -633,6 +633,7 @@ class Cell(dbus.service.Object):
             glib.timeout_add(SYNC_INTERVAL, startSyncThunk)
         except httplib.HTTPException, exc:
             # TODO: Handle exceptions
+            # e.g. BadStatusError, which might happen when crossing HTTPS and HTTP
             pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
                                                      str(exc)))
             pass
@@ -839,7 +840,6 @@ class DPropMan(dbus.service.Object):
             for ip in ips[2]:
                 ip += ':%d' % (parsed_url.port)
 
-                print ip, ipAddresses()
                 if ip in map(lambda x: '%s:%d' % (x, self.port),
                              ipAddresses()):
                     pdebug("Wait...  This is actually local!")
