@@ -834,7 +834,7 @@ class DPropMan(dbus.service.Object):
                 if ip in map(lambda x: '%s:%d' % (x, self.port),
                              ipAddresses()):
                     pdebug("Wait...  This is actually local!")
-                    return registerCell(uuid)
+                    return self.registerCell(uuid)
             
             # Okay, not the remote host.  Then we need to actually
             # mint the new cell and tell it to pull from the remote
