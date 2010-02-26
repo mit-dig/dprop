@@ -17,6 +17,7 @@ if __name__ == '__main__':
 from twisted.web.error import NoResource
 from twisted.web.resource import Resource
 from twisted.web.server import Site as TwistedSite
+from twisted.web.http import parse_qs
 from twisted.internet.reactor import listenTCP, listenSSL
 import OpenSSL.SSL
 import netifaces
@@ -152,6 +153,8 @@ class DPropManCellPeers(Resource):
     def render_PUT(self, request):
         # Extract the certificate for access control purposes.
         pdebug("Received PUT for Peers of %s" % (self.path))
+        parameters = parse_qs(request.content.read(), 1)
+        
         cert = False
         if self.dpropman.useSSL:
             cert = request.channel.transport.getPeerCertificate()
@@ -173,10 +176,11 @@ class DPropManCellPeers(Resource):
         
         # To make this idempotent, shouldn't this require the cert to
         # be part of the request itself?
-        url = dpropjson.loads(request.args['peer'])['url']
+        # Why is request.args empty???
+        url = dpropjson.loads(parameters['peer'][0])['url']
         path = pathifyURL(url)
-        pdebug("Adding %s as peer with path %s" % (url, path))
-        cell.peers[path] = {'cert': cert, 'url': url}
+        pdebug("Adding %s as peer with path %s" % (url))
+        cell.peers[url] = {'cert': False, 'url': url}
         request.setResponseCode(httplib.OK)
         return ""
 
@@ -230,6 +234,8 @@ class DPropManCell(Resource):
     def render_PUT(self, request):
         # Extract the certificate for access control purposes.
         pdebug("Received PUT for %s" % (self.path))
+        parameters = parse_qs(request.content.read(), 1)
+        
         cert = False
         if self.dpropman.useSSL:
             cert = request.channel.transport.getPeerCertificate()
@@ -245,7 +251,7 @@ class DPropManCell(Resource):
         
         # If so, forward the update to the cell so it can do the merge.
         pdebug("PUT was ACCEPTED! Forwarding Update!")
-        cell.doUpdate(request.args['data'], False)
+        cell.doUpdate(parameters['data'][0], False)
         
         # And let the client know that it was accepted.
         request.setResponseCode(httplib.ACCEPTED)
