@@ -825,12 +825,13 @@ class DPropMan(dbus.service.Object):
             # Check if we're the remote host.  If so, we just need to
             # run a local registerCell.
             try:
-                ips = socket.gethostbyname_ex(self.hostname)
+                ips = socket.gethostbyname_ex(parsed_url.hostname)
             except:
                 pass
             for ip in ips[2]:
-                ip += ':%d' % (self.port)
-                
+                ip += ':%d' % (parsed_url.port)
+
+                print ip, ipAddresses()
                 if ip in map(lambda x: '%s:%d' % (x, self.port),
                              ipAddresses()):
                     pdebug("Wait...  This is actually local!")
