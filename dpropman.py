@@ -269,12 +269,17 @@ class DPropManCells(Resource):
         self.dpropman = dpropman
     
     def getChild(self, path, request):
-        path = '/' + '/'.join([path] + request.postpath)
+#        path = '/' + '/'.join([path] + request.postpath)
+        pdebug("Attempting to find cell for %s" % (path))
+#        pdebug("Possible paths include %s" % (`self.dpropman.cells.keys()`))
         if path in self.dpropman.cells:
+            pdebug("Found it!")
             return DPropManCell(self.dpropman, path)
         elif path == '':
+            pdebug("Oh, well I wasn't looking for a cell anyway.")
             return self
         else:
+            pdebug("Couldn't find cell!")
             return twisted.web.error.NoResource("No such resource.")
     
     def render_GET(self, request):
