@@ -568,17 +568,20 @@ class Cell(dbus.service.Object):
         parsed_url = urlparse(url)
         if parsed_url.scheme != 'http' and parsed_url.scheme != 'https':
             # Balk at non-HTTP addresses.
+            pdebug("Uh oh!  Didn't get an HTTP URL!")
             raise InvalidURLException(
                 'The remote cell URL %s is not a valid HTTP URL.' % (url))
         
         uuid = parsed_url.path.split('/')
         if uuid[-1] == '':
-            uuid = self.escapePath(uuid[-2])
+            uuid = self.escapePath(uuid[-2].replace('-', ''))
         else:
-            uuid = self.escapePath(uuid[-1])
+            uuid = self.escapePath(uuid[-1].replace('-', ''))
+        pdebug("Okay, the UUID must be %s" % (uuid))
         
         if uuid != self.uuid:
             # Raise an exception if the UUIDs don't match.
+            pdebug("But the UUID of this cell is %s!" % (self.uuid))
             raise UUIDMismatchException(
                 'The UUID in the provided URL (%s) does not match the one ' +
                 'on record for this cell (%s)' % (uuid, self.uuid))
@@ -593,41 +596,40 @@ class Cell(dbus.service.Object):
                 h = httplib.HTTPSConnection(parsed_url.netloc,
                                             key_file=self.key,
                                             cert_file=self.cert)
-                pdebug("Performing initial data sync.")
-                h.request('GET', parsed_url.path, {'Referer': self.referer})
-                resp = h.getresponse()
-                if resp.status != httplib.OK:
-                    # TODO: Handle errors
-                    pdebug("Didn't get OK response!!")
-                
-                # Send the response out for a local merge.
-                pdebug("Performing merge...")
-                self.doUpdate(resp.read(), False)
-                
-                pdebug("Performing initial peers sync.")
-                h.request('GET', parsed_url.path + '/Peers', {'Referer': self.referer})
-                resp = h.getresponse()
-                if resp.status != httplib.OK:
-                    # TODO: Handle errors
-                    pdebug("Didn't get OK response!!")
-                
-                pdebug("Merging peers...")
-                self.peers.update(dpropjson.loads(resp.read()))
-                self.peersEtag = dpropjson.dumps(self.peers)
-                pdebug("New etag: %s" % (self.peersEtag))
-                
-                h.close()
-                
-                pdebug("Setting up addToPeer thunks...")
-                for peer in self.peers:
-                    glib.idle_add(thunkifyAddToPeer(peer))
-                pdebug("Setting up peerSync thunks...")
-                glib.timeout_add(SYNC_INTERVAL, startSyncThunk)
+            pdebug("Performing initial data sync.")
+            h.request('GET', parsed_url.path, {'Referer': self.referer})
+            resp = h.getresponse()
+            if resp.status != httplib.OK:
+                # TODO: Handle errors
+                pdebug("Didn't get OK response!!")
+            
+            # Send the response out for a local merge.
+            pdebug("Performing merge...")
+            self.doUpdate(resp.read(), False)
+            
+            pdebug("Performing initial peers sync.")
+            h.request('GET', parsed_url.path + '/Peers', {'Referer': self.referer})
+            resp = h.getresponse()
+            if resp.status != httplib.OK:
+                # TODO: Handle errors
+                pdebug("Didn't get OK response!!")
+            
+            pdebug("Merging peers...")
+            self.peers.update(dpropjson.loads(resp.read()))
+            self.peersEtag = dpropjson.dumps(self.peers)
+            pdebug("New etag: %s" % (self.peersEtag))
+            
+            h.close()
+            
+            pdebug("Setting up addToPeer thunks...")
+            for peer in self.peers:
+                glib.idle_add(thunkifyAddToPeer(peer))
+            pdebug("Setting up peerSync thunks...")
+            glib.timeout_add(SYNC_INTERVAL, startSyncThunk)
         except httplib.HTTPException:
             # TODO: Handle exceptions
             pdebug("Caught HTTPException!")
             pass
-        
     
 #    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
 #                         in_signature='ass', out_signature='')
