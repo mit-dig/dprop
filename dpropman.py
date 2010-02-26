@@ -339,8 +339,8 @@ class Cell(dbus.service.Object):
         self.data = dpropjson.dumps(Nothing())
         self.etag = makeEtag(self.data)
         self.referer = referer
-#        self.cert = cert
-#        self.key = key
+        self.cert = cert
+        self.key = key
 #        self.readAccess = set()
 #        self.writeAccess = set()
         self.peers = {}
