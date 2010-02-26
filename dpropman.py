@@ -415,9 +415,10 @@ class Cell(dbus.service.Object):
                     else:
                         pdebug("PeerUpdate was ACCEPTED!!")
                     h.close()
-                except httplib.HTTPException:
+                except httplib.HTTPException, exc:
                     # TODO: Handle exceptions
-                    pdebug("Caught HTTPException!")
+                    pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
+                                                             str(exc)))
                 
                 return False
             
@@ -488,9 +489,10 @@ class Cell(dbus.service.Object):
                     else:
                         pdebug("PeerAdd was ACCEPTED!!")
                     h.close()
-                except httplib.HTTPException:
+                except httplib.HTTPException, exc:
                     # TODO: Handle exceptions
-                    pdebug("Caught HTTPException!")
+                    pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
+                                                             str(exc)))
                 
                 return False
             
@@ -549,9 +551,10 @@ class Cell(dbus.service.Object):
                             pdebug("Unexpected HTTP response!")
                         
                         h.close()
-                    except httplib.HTTPException:
+                    except httplib.HTTPException, exc:
                         # TODO: Handle exceptions
-                        pdebug("Caught HTTPException!")
+                        pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
+                                                                 str(exc)))
                     
                     return False
                 
@@ -628,9 +631,10 @@ class Cell(dbus.service.Object):
                 glib.idle_add(thunkifyAddToPeer(peer))
             pdebug("Setting up peerSync thunks...")
             glib.timeout_add(SYNC_INTERVAL, startSyncThunk)
-        except httplib.HTTPException:
+        except httplib.HTTPException, exc:
             # TODO: Handle exceptions
-            pdebug("Caught HTTPException!")
+            pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
+                                                     str(exc)))
             pass
     
 #    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
