@@ -483,7 +483,7 @@ class Cell(dbus.service.Object):
                                                     cert_file=self.cert)
                     h.request('PUT', url.path + '/Peers',
                               urllib.urlencode(
-                            {'data': dpropjson.dumps({'url': self.referer})}),
+                            {'peer': dpropjson.dumps({'url': self.referer})}),
                               {'Referer': self.referer,
                                'Content-Type':
                                    'application/x-www-form-urlencoded'})
@@ -565,8 +565,8 @@ class Cell(dbus.service.Object):
                 
                 return thunk
             
-            for peer in self.peers:
-                gobject.idle_add(thunkifyPeerSync(peer))
+            for peerKey in self.peers:
+                gobject.idle_add(thunkifyPeerSync(self.peers[peerKey]))
             
             pdebug("Done adding thunks.")
             
@@ -625,15 +625,19 @@ class Cell(dbus.service.Object):
                 pdebug("Didn't get OK response!!")
             else:
                 pdebug("Merging peers...")
+                # Add the peer we connect to before the update.
+                self.peers[str(url)] = {'cert': False, 'url': str(url)}
                 self.peers.update(dpropjson.loads(resp.read()))
+                pdebug("%s" % (str(self.peers)))
                 self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
                 pdebug("New etag: %s" % (self.peersEtag))
             
             h.close()
             
             pdebug("Setting up addToPeer thunks...")
-            for peer in self.peers:
-                gobject.idle_add(thunkifyAddToPeer(peer))
+            for peerKey in self.peers:
+                # This doesn't seem to be working!!
+                gobject.idle_add(thunkifyAddToPeer(self.peers[peerKey]))
             pdebug("Setting up peerSync thunks...")
             gobject.timeout_add(SYNC_INTERVAL, startSyncThunk)
         except httplib.HTTPException, exc:
