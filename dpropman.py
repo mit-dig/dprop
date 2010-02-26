@@ -181,6 +181,8 @@ class DPropManCellPeers(Resource):
         path = pathifyURL(url)
         pdebug("Adding %s as peer" % (url))
         cell.peers[url] = {'cert': False, 'url': url}
+        cell.peersEtag = makeEtag(dpropjson.dumps(cell.peers))
+        pdebug("New peersEtag: %s" % (cell.peersEtag))
         request.setResponseCode(httplib.OK)
         return ""
 
@@ -356,6 +358,7 @@ class Cell(dbus.service.Object):
 #        self.writeAccess = set()
         self.peers = {self.referer: {'cert': self.cert, 'url': self.referer}}
         self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
+        pdebug("New peersEtag: %s" % (self.peersEtag))
         dbus.service.Object.__init__(self, conn, object_path)
         
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
@@ -496,11 +499,11 @@ class Cell(dbus.service.Object):
                                'Content-Type':
                                    'application/x-www-form-urlencoded'})
                     resp = h.getresponse()
-                    if resp.status != httplib.ACCEPTED:
+                    if resp.status != httplib.OK:
                         # TODO: Handle errors
-                        pdebug("Didn't get ACCEPTED response!!")
+                        pdebug("Didn't get OK response!!")
                     else:
-                        pdebug("PeerAdd was ACCEPTED!!")
+                        pdebug("PeerAdd was OK!!")
                     h.close()
                 except httplib.HTTPException, exc:
                     # TODO: Handle exceptions
