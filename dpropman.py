@@ -34,7 +34,11 @@ def pdebug(s):
 def ipAddresses():
     addrs = []
     for iface in netifaces.interfaces():
-        ifaddrs = netifaces.ifaddresses(iface)
+        try:
+            ifaddrs = netifaces.ifaddresses(iface)
+        except ValueError:
+            continue
+        
         for type in ifaddrs:
             for item in ifaddrs[type]:
                 if 'addr' in item:
