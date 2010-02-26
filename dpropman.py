@@ -179,7 +179,7 @@ class DPropManCellPeers(Resource):
         # Why is request.args empty???
         url = dpropjson.loads(parameters['peer'][0])['url']
         path = pathifyURL(url)
-        pdebug("Adding %s as peer with path %s" % (url))
+        pdebug("Adding %s as peer" % (url))
         cell.peers[url] = {'cert': False, 'url': url}
         request.setResponseCode(httplib.OK)
         return ""
