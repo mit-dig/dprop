@@ -348,7 +348,7 @@ class Cell(dbus.service.Object):
         self.key = key
 #        self.readAccess = set()
 #        self.writeAccess = set()
-        self.peers = {}
+        self.peers = {self.referer: {'cert': self.cert, 'url': self.referer}}
         self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
         dbus.service.Object.__init__(self, conn, object_path)
         
@@ -430,9 +430,11 @@ class Cell(dbus.service.Object):
             return thunk
         
         pdebug("Setting up peerUpdate thunks...")
-        for peer in self.peers:
+        for peerKey in self.peers:
+            if peerKey == self.referer:
+                continue
             # For each peer, add a thunk to update it to the runloop
-            gobject.idle_add(thunkifyPeerUpdate(peer, message))
+            gobject.idle_add(thunkifyPeerUpdate(self.peers[peerKey], message))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s', out_signature='')
@@ -566,6 +568,8 @@ class Cell(dbus.service.Object):
                 return thunk
             
             for peerKey in self.peers:
+                if peerKey == self.referer:
+                    continue
                 gobject.idle_add(thunkifyPeerSync(self.peers[peerKey]))
             
             pdebug("Done adding thunks.")
@@ -626,9 +630,8 @@ class Cell(dbus.service.Object):
             else:
                 pdebug("Merging peers...")
                 # Add the peer we connect to before the update.
-                self.peers[str(url)] = {'cert': False, 'url': str(url)}
+#                self.peers[str(url)] = {'cert': False, 'url': str(url)}
                 self.peers.update(dpropjson.loads(resp.read()))
-                pdebug("%s" % (str(self.peers)))
                 self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
                 pdebug("New etag: %s" % (self.peersEtag))
             
@@ -636,7 +639,8 @@ class Cell(dbus.service.Object):
             
             pdebug("Setting up addToPeer thunks...")
             for peerKey in self.peers:
-                # This doesn't seem to be working!!
+                if peerKey == self.referer:
+                    continue
                 gobject.idle_add(thunkifyAddToPeer(self.peers[peerKey]))
             pdebug("Setting up peerSync thunks...")
             gobject.timeout_add(SYNC_INTERVAL, startSyncThunk)
