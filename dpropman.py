@@ -517,8 +517,8 @@ class Cell(dbus.service.Object):
                                                         cert_file=self.cert)
                         pdebug("Attempting to sync data")
                         h.request('GET', url.path,
-                                  {'Referer': self.referer,
-                                   'If-None-Match': self.etag})
+                                  headers={'Referer': self.referer,
+                                           'If-None-Match': self.etag})
                         resp = h.getresponse()
                         if resp.status == httplib.OK:
                             # Got a response.  Time to merge.
@@ -533,8 +533,8 @@ class Cell(dbus.service.Object):
                         # Next, sync peers.
                         pdebug("Attempting to sync peers")
                         h.request('GET', url.path + '/Peers',
-                                  {'Referer': self.referer,
-                                   'If-None-Match': self.peersEtag})
+                                  headers={'Referer': self.referer,
+                                           'If-None-Match': self.peersEtag})
                         resp = h.getresponse()
                         if resp.status == httplib.OK:
                             # Got a response.  Time to merge.
@@ -597,7 +597,8 @@ class Cell(dbus.service.Object):
                                             key_file=self.key,
                                             cert_file=self.cert)
             pdebug("Performing initial data sync.")
-            h.request('GET', parsed_url.path, {'Referer': self.referer})
+            h.request('GET', parsed_url.path,
+                      headers={'Referer': self.referer})
             resp = h.getresponse()
             if resp.status != httplib.OK:
                 # TODO: Handle errors
@@ -608,7 +609,8 @@ class Cell(dbus.service.Object):
             self.doUpdate(resp.read(), False)
             
             pdebug("Performing initial peers sync.")
-            h.request('GET', parsed_url.path + '/Peers', {'Referer': self.referer})
+            h.request('GET', parsed_url.path + '/Peers',
+                      headers={'Referer': self.referer})
             resp = h.getresponse()
             if resp.status != httplib.OK:
                 # TODO: Handle errors
