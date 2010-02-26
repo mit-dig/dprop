@@ -176,7 +176,6 @@ class DPropManCellPeers(Resource):
         
         # To make this idempotent, shouldn't this require the cert to
         # be part of the request itself?
-        # Why is request.args empty???
         url = dpropjson.loads(parameters['peer'][0])['url']
         path = pathifyURL(url)
         pdebug("Adding %s as peer" % (url))
@@ -359,6 +358,87 @@ class Cell(dbus.service.Object):
         self.peers = {self.referer: {'cert': self.cert, 'url': self.referer}}
         self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
         pdebug("New peersEtag: %s" % (self.peersEtag))
+        
+        # Set up synchronization
+        def startSyncThunk():
+            # A thunk to start synchronization mechanisms.
+            pdebug("Attempting to start synchronization thunks")
+            def thunkifyPeerSync(peer):
+                
+                # Make the thunk to sync with the given peer.
+                def thunk():
+                    pdebug("Attempting to sync %s to peer %s" % (self.uuid,
+                                                                 peer['url']))
+                    try:
+                        url = urlparse(peer['url'])
+                        if url.scheme == 'http':
+                            h = httplib.HTTPConnection(url.netloc)
+                        elif url.scheme == 'https':
+                            # TODO: Is it safe to keep these keys and
+                            # certs around???
+                            h = httplib.HTTPSConnection(url.netloc,
+                                                        key_file=self.key,
+                                                        cert_file=self.cert)
+                        pdebug("Attempting to sync data")
+                        h.request('GET', url.path,
+                                  headers={'Referer': self.referer,
+                                           'If-None-Match': self.etag})
+                        resp = h.getresponse()
+                        if resp.status == httplib.OK:
+                            # Got a response.  Time to merge.
+                            pdebug("Got new data in sync. Merging...")
+                            self.doUpdate(resp.read(), False)
+                        elif resp.status == httplib.NOT_MODIFIED:
+                            pdebug("Sync resulted in no new data.")
+                            # Dummy resp.read() to make sure we can reuse h.
+                            resp.read()
+                        else:
+                            # TODO: Handle errors
+                            pdebug("Unexpected HTTP response!")
+                        
+                        # Next, sync peers.
+                        pdebug("Attempting to sync peers")
+                        h.request('GET', url.path + '/Peers',
+                                  headers={'Referer': self.referer,
+                                           'If-None-Match': self.peersEtag})
+                        # Why do I get a ResponseNotReady error?
+                        # Why are the peers a bad eTag?
+                        resp = h.getresponse()
+                        if resp.status == httplib.OK:
+                            # Got a response.  Time to merge.
+                            pdebug("Got new data in sync. Merging...")
+                            self.peers.update(dpropjson.loads(resp.read()))
+                            self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
+                            pdebug("New etag: %s" % (self.peersEtag))
+                        elif resp.status == httplib.NOT_MODIFIED:
+                            pdebug("Sync resulted in no new data.")
+                        else:
+                            # TODO: Handle errors
+                            pdebug("Unexpected HTTP response!")
+                        
+                        h.close()
+                    except httplib.HTTPException, exc:
+                        # TODO: Handle exceptions
+                        pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
+                                                                 str(exc)))
+                    
+                    return False
+                
+                return thunk
+            
+            for peerKey in self.peers:
+                if peerKey == self.referer:
+                    continue
+                gobject.idle_add(thunkifyPeerSync(self.peers[peerKey]))
+            
+            pdebug("Done adding thunks.")
+            
+            # TODO: Ehm, what if we delete this cell???
+            return True
+        
+        # Enable syncing
+        gobject.timeout_add(SYNC_INTERVAL, startSyncThunk)
+        
         dbus.service.Object.__init__(self, conn, object_path)
         
     @dbus.service.method('edu.mit.csail.dig.DPropMan',
@@ -514,78 +594,6 @@ class Cell(dbus.service.Object):
             
             return thunk
         
-        def startSyncThunk():
-            # A thunk to start synchronization mechanisms.
-            pdebug("Attempting to start synchronization thunks")
-            def thunkifyPeerSync(peer):
-                
-                # Make the thunk to sync with the given peer.
-                def thunk():
-                    pdebug("Attempting to sync %s to peer %s" % (self.uuid,
-                                                                 peer['url']))
-                    try:
-                        url = urlparse(peer['url'])
-                        if url.scheme == 'http':
-                            h = httplib.HTTPConnection(url.netloc)
-                        elif url.scheme == 'https':
-                            # TODO: Is it safe to keep these keys and
-                            # certs around???
-                            h = httplib.HTTPSConnection(url.netloc,
-                                                        key_file=self.key,
-                                                        cert_file=self.cert)
-                        pdebug("Attempting to sync data")
-                        h.request('GET', url.path,
-                                  headers={'Referer': self.referer,
-                                           'If-None-Match': self.etag})
-                        resp = h.getresponse()
-                        if resp.status == httplib.OK:
-                            # Got a response.  Time to merge.
-                            pdebug("Got new data in sync. Merging...")
-                            self.doUpdate(resp.read(), False)
-                        elif resp.status == httplib.NOT_MODIFIED:
-                            pdebug("Sync resulted in no new data.")
-                        else:
-                            # TODO: Handle errors
-                            pdebug("Unexpected HTTP response!")
-                        
-                        # Next, sync peers.
-                        pdebug("Attempting to sync peers")
-                        h.request('GET', url.path + '/Peers',
-                                  headers={'Referer': self.referer,
-                                           'If-None-Match': self.peersEtag})
-                        resp = h.getresponse()
-                        if resp.status == httplib.OK:
-                            # Got a response.  Time to merge.
-                            pdebug("Got new data in sync. Merging...")
-                            self.peers.update(dpropjson.loads(resp.read()))
-                            self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
-                            pdebug("New etag: %s" % (self.peersEtag))
-                        elif resp.status == httplib.NOT_MODIFIED:
-                            pdebug("Sync resulted in no new data.")
-                        else:
-                            # TODO: Handle errors
-                            pdebug("Unexpected HTTP response!")
-                        
-                        h.close()
-                    except httplib.HTTPException, exc:
-                        # TODO: Handle exceptions
-                        pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
-                                                                 str(exc)))
-                    
-                    return False
-                
-                return thunk
-            
-            for peerKey in self.peers:
-                if peerKey == self.referer:
-                    continue
-                gobject.idle_add(thunkifyPeerSync(self.peers[peerKey]))
-            
-            pdebug("Done adding thunks.")
-            
-            # TODO: Ehm, what if we delete this cell???
-            return True
-        
         parsed_url = urlparse(url)
         if parsed_url.scheme != 'http' and parsed_url.scheme != 'https':
             # Balk at non-HTTP addresses.
@@ -651,8 +659,6 @@ class Cell(dbus.service.Object):
                 if peerKey == self.referer:
                     continue
                 gobject.idle_add(thunkifyAddToPeer(self.peers[peerKey]))
-            pdebug("Setting up peerSync thunks...")
-            gobject.timeout_add(SYNC_INTERVAL, startSyncThunk)
         except httplib.HTTPException, exc:
             # TODO: Handle exceptions
             # e.g. BadStatusError, which might happen when crossing HTTPS and HTTP
