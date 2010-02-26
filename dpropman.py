@@ -547,7 +547,7 @@ class Cell(dbus.service.Object):
                             # Got a response.  Time to merge.
                             pdebug("Got new data in sync. Merging...")
                             self.peers.update(dpropjson.loads(resp.read()))
-                            self.peersEtag = dpropjson.dumps(self.peers)
+                            self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
                             pdebug("New etag: %s" % (self.peersEtag))
                         elif resp.status == httplib.NOT_MODIFIED:
                             pdebug("Sync resulted in no new data.")
@@ -626,7 +626,7 @@ class Cell(dbus.service.Object):
             else:
                 pdebug("Merging peers...")
                 self.peers.update(dpropjson.loads(resp.read()))
-                self.peersEtag = dpropjson.dumps(self.peers)
+                self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
                 pdebug("New etag: %s" % (self.peersEtag))
             
             h.close()
