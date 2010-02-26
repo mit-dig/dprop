@@ -147,7 +147,7 @@ class DPropManCellPeers(Resource):
             pdebug("Responding with OK")
             request.setResponseCode(httplib.OK)
             request.setETag(cell.peersEtag)
-            return dpropjson.dumps(cell.peers)
+            return dpropjson.dumps(cell.peers).encode('utf-8')
     
     def render_PUT(self, request):
         # Extract the certificate for access control purposes.
