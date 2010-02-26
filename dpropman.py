@@ -432,7 +432,7 @@ class Cell(dbus.service.Object):
         pdebug("Setting up peerUpdate thunks...")
         for peer in self.peers:
             # For each peer, add a thunk to update it to the runloop
-            glib.idle_add(thunkifyPeerUpdate(peer, message))
+            gobject.idle_add(thunkifyPeerUpdate(peer, message))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s', out_signature='')
@@ -566,7 +566,7 @@ class Cell(dbus.service.Object):
                 return thunk
             
             for peer in self.peers:
-                glib.idle_add(thunkifyPeerSync(peer))
+                gobject.idle_add(thunkifyPeerSync(peer))
             
             pdebug("Done adding thunks.")
             
@@ -633,9 +633,9 @@ class Cell(dbus.service.Object):
             
             pdebug("Setting up addToPeer thunks...")
             for peer in self.peers:
-                glib.idle_add(thunkifyAddToPeer(peer))
+                gobject.idle_add(thunkifyAddToPeer(peer))
             pdebug("Setting up peerSync thunks...")
-            glib.timeout_add(SYNC_INTERVAL, startSyncThunk)
+            gobject.timeout_add(SYNC_INTERVAL, startSyncThunk)
         except httplib.HTTPException, exc:
             # TODO: Handle exceptions
             # e.g. BadStatusError, which might happen when crossing HTTPS and HTTP
