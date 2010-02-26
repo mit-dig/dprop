@@ -606,10 +606,10 @@ class Cell(dbus.service.Object):
             if resp.status != httplib.OK:
                 # TODO: Handle errors
                 pdebug("Didn't get OK response!!")
-            
-            # Send the response out for a local merge.
-            pdebug("Performing merge...")
-            self.doUpdate(resp.read(), False)
+            else:
+                # Send the response out for a local merge.
+                pdebug("Performing merge...")
+                self.doUpdate(resp.read(), False)
             
             pdebug("Performing initial peers sync.")
             h.request('GET', parsed_url.path + '/Peers',
@@ -618,11 +618,11 @@ class Cell(dbus.service.Object):
             if resp.status != httplib.OK:
                 # TODO: Handle errors
                 pdebug("Didn't get OK response!!")
-            
-            pdebug("Merging peers...")
-            self.peers.update(dpropjson.loads(resp.read()))
-            self.peersEtag = dpropjson.dumps(self.peers)
-            pdebug("New etag: %s" % (self.peersEtag))
+            else:
+                pdebug("Merging peers...")
+                self.peers.update(dpropjson.loads(resp.read()))
+                self.peersEtag = dpropjson.dumps(self.peers)
+                pdebug("New etag: %s" % (self.peersEtag))
             
             h.close()
             
