@@ -455,7 +455,7 @@ class Cell(dbus.service.Object):
     
     def doUpdate(self, message, isLocal):
         """Handles sending out an update signal and then maybe updating
-        peers."""
+        peers.  Call me with a Python string containing JSON."""
         # Push the update along if it was a local update attempt.
         pdebug("%s sending out UpdateSignal" % (self.uuid))
         self.UpdateSignal(message)
@@ -496,9 +496,11 @@ class Cell(dbus.service.Object):
                         h = httplib.HTTPSConnection(url.netloc,
                                                     key_file=self.key,
                                                     cert_file=self.cert)
+                    # We don't dpropjson encode here, as the data
+                    # should already be in JSON.
                     h.request('PUT', url.path,
                               urllib.urlencode(
-                            {'data': dpropjson.dumps(message)}),
+                            {'data': message}),
                               {'Referer': self.referer,
                                'Content-Type':
                                    'application/x-www-form-urlencoded'})
