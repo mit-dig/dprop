@@ -21,6 +21,7 @@ from twisted.web.http import parse_qs
 from twisted.internet.reactor import listenTCP, listenSSL
 import OpenSSL.SSL
 import netifaces
+import threading
 
 from dpropjson import Nothing
 import dpropjson
@@ -139,16 +140,20 @@ class DPropManCellPeers(Resource):
         pdebug("Received GET for Peers of %s" % (self.path))
         cell = self.dpropman.cells[self.path]
         
+        cell.peerLock.acquire()
         if request.getHeader('If-None-Match') == cell.peersEtag:
             pdebug("Responding with NOT MODIFIED")
             request.setResponseCode(httplib.NOT_MODIFIED)
+            cell.peerLock.release()
             return ""
         else:
             # Return the data and ETag if updated...
             pdebug("Responding with OK")
             request.setResponseCode(httplib.OK)
             request.setETag(cell.peersEtag)
-            return dpropjson.dumps(cell.peers).encode('utf-8')
+            data = dpropjson.dumps(cell.peers).encode('utf-8')
+            cell.peerLock.release()
+            return data
     
     def render_PUT(self, request):
         # Extract the certificate for access control purposes.
@@ -179,9 +184,11 @@ class DPropManCellPeers(Resource):
         url = dpropjson.loads(parameters['peer'][0])['url']
         path = pathifyURL(url)
         pdebug("Adding %s as peer" % (url))
+        cell.peerLock.acquire()
         cell.peers[url] = {'cert': False, 'url': url}
         cell.peersEtag = makeEtag(dpropjson.dumps(cell.peers))
         pdebug("New peersEtag: %s" % (cell.peersEtag))
+        cell.peerLock.release()
         request.setResponseCode(httplib.OK)
         return ""
 
@@ -221,16 +228,20 @@ class DPropManCell(Resource):
 #            return ""
         
         # Check the ETag.
+        cell.dataLock.acquire()
         if request.getHeader('If-None-Match') == cell.etag:
             pdebug("Responding with NOT MODIFIED")
             request.setResponseCode(httplib.NOT_MODIFIED)
+            cell.dataLock.release()
             return ""
         else:
             # Return the data and ETag if updated...
             pdebug("Responding with OK")
             request.setResponseCode(httplib.OK)
             request.setETag(cell.etag)
-            return cell.data
+            data = cell.data
+            cell.dataLock.release()
+            return data
     
     def render_PUT(self, request):
         # Extract the certificate for access control purposes.
@@ -350,6 +361,7 @@ class Cell(dbus.service.Object):
         self.uuid = uuid
         self.data = dpropjson.dumps(Nothing())
         self.etag = makeEtag(self.data)
+        self.dataLock = threading.Lock()
         self.referer = referer
         self.cert = cert
         self.key = key
@@ -357,6 +369,7 @@ class Cell(dbus.service.Object):
 #        self.writeAccess = set()
         self.peers = {self.referer: {'cert': self.cert, 'url': self.referer}}
         self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
+        self.peerLock = threading.Lock()
         pdebug("New peersEtag: %s" % (self.peersEtag))
         
         # Set up synchronization
@@ -407,9 +420,11 @@ class Cell(dbus.service.Object):
                         if resp.status == httplib.OK:
                             # Got a response.  Time to merge.
                             pdebug("Got new data in sync. Merging...")
+                            self.peerLock.acquire()
                             self.peers.update(dpropjson.loads(resp.read()))
                             self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
                             pdebug("New etag: %s" % (self.peersEtag))
+                            self.peerLock.release()
                         elif resp.status == httplib.NOT_MODIFIED:
                             pdebug("Sync resulted in no new data.")
                         else:
@@ -429,7 +444,10 @@ class Cell(dbus.service.Object):
             for peerKey in self.peers:
                 if peerKey == self.referer:
                     continue
-                gobject.idle_add(thunkifyPeerSync(self.peers[peerKey]))
+                # We now use threading.
+                t = threading.Thread(target=thunkifyPeerSync(self.peers[peerKey]))
+                t.start()
+#                gobject.idle_add(thunkifyPeerSync(self.peers[peerKey]))
             
             pdebug("Done adding thunks.")
             
@@ -525,7 +543,11 @@ class Cell(dbus.service.Object):
             if peerKey == self.referer:
                 continue
             # For each peer, add a thunk to update it to the runloop
-            gobject.idle_add(thunkifyPeerUpdate(self.peers[peerKey], message))
+            # We now use threading.
+            t = threading.Thread(target=thunkifyPeerUpdate(self.peers[peerKey],
+                                                           message))
+            t.start()
+#            gobject.idle_add(thunkifyPeerUpdate(self.peers[peerKey], message))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s', out_signature='')
@@ -533,8 +555,10 @@ class Cell(dbus.service.Object):
         """[DBUS METHOD] Locally change the cell's contents to data."""
         pdebug("%s received changeCell() call" % (self.uuid))
         if self.data != str(data):
+            self.dataLock.acquire()
             self.data = str(data)
             self.etag = makeEtag(self.data)
+            self.dataLock.release()
 #            self.NewContentsSignal(str(data))
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
@@ -617,56 +641,67 @@ class Cell(dbus.service.Object):
                 'The UUID in the provided URL (%s) does not match the one ' +
                 'on record for this cell (%s)' % (uuid, self.uuid))
         
-        try:
-            parsed_url = urlparse(url)
-            if parsed_url.scheme == 'http':
-                h = httplib.HTTPConnection(parsed_url.netloc)
-            elif parsed_url.scheme == 'https':
-                # TODO: Is it safe to keep these keys and
-                # certs around???
-                h = httplib.HTTPSConnection(parsed_url.netloc,
-                                            key_file=self.key,
-                                            cert_file=self.cert)
-            pdebug("Performing initial data sync.")
-            h.request('GET', parsed_url.path,
-                      headers={'Referer': self.referer})
-            resp = h.getresponse()
-            if resp.status != httplib.OK:
-                # TODO: Handle errors
-                pdebug("Didn't get OK response!!")
-            else:
-                # Send the response out for a local merge.
-                pdebug("Performing merge...")
-                self.doUpdate(resp.read(), False)
-            
-            pdebug("Performing initial peers sync.")
-            h.request('GET', parsed_url.path + '/Peers',
-                      headers={'Referer': self.referer})
-            resp = h.getresponse()
-            if resp.status != httplib.OK:
-                # TODO: Handle errors
-                pdebug("Didn't get OK response!!")
-            else:
-                pdebug("Merging peers...")
-                # Add the peer we connect to before the update.
-#                self.peers[str(url)] = {'cert': False, 'url': str(url)}
-                self.peers.update(dpropjson.loads(resp.read()))
-                self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
-                pdebug("New etag: %s" % (self.peersEtag))
-            
-            h.close()
-            
-            pdebug("Setting up addToPeer thunks...")
-            for peerKey in self.peers:
-                if peerKey == self.referer:
-                    continue
-                gobject.idle_add(thunkifyAddToPeer(self.peers[peerKey]))
-        except httplib.HTTPException, exc:
-            # TODO: Handle exceptions
-            # e.g. BadStatusError, which might happen when crossing HTTPS and HTTP
-            pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
-                                                     str(exc)))
-            pass
+        def initThunk():
+            try:
+                parsed_url = urlparse(url)
+                if parsed_url.scheme == 'http':
+                    h = httplib.HTTPConnection(parsed_url.netloc)
+                elif parsed_url.scheme == 'https':
+                    # TODO: Is it safe to keep these keys and
+                    # certs around???
+                    h = httplib.HTTPSConnection(parsed_url.netloc,
+                                                key_file=self.key,
+                                                cert_file=self.cert)
+                pdebug("Performing initial data sync.")
+                h.request('GET', parsed_url.path,
+                          headers={'Referer': self.referer})
+                resp = h.getresponse()
+                if resp.status != httplib.OK:
+                    # TODO: Handle errors
+                    pdebug("Didn't get OK response!!")
+                else:
+                    # Send the response out for a local merge.
+                    pdebug("Performing merge...")
+                    self.doUpdate(resp.read(), False)
+                
+                pdebug("Performing initial peers sync.")
+                h.request('GET', parsed_url.path + '/Peers',
+                          headers={'Referer': self.referer})
+                resp = h.getresponse()
+                if resp.status != httplib.OK:
+                    # TODO: Handle errors
+                    pdebug("Didn't get OK response!!")
+                else:
+                    pdebug("Merging peers...")
+                    # Add the peer we connect to before the update.
+#                    self.peers[str(url)] = {'cert': False, 'url': str(url)}
+                    self.peerLock.acquire()
+                    self.peers.update(dpropjson.loads(resp.read()))
+                    self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
+                    pdebug("New etag: %s" % (self.peersEtag))
+                    self.peerLock.release()
+                
+                h.close()
+                
+                pdebug("Setting up addToPeer thunks...")
+                for peerKey in self.peers:
+                    if peerKey == self.referer:
+                        continue
+                    # We now use threading.
+                    t = threading.Thread(target=thunkifyAddToPeer(self.peers[peerKey]))
+                    t.start()
+#                    gobject.idle_add(thunkifyAddToPeer(self.peers[peerKey]))
+            except httplib.HTTPException, exc:
+                # TODO: Handle exceptions
+                # e.g. BadStatusError, which might happen when crossing HTTPS and HTTP
+                pdebug("Caught HTTPException: %s: %s" % (type(exc).__name__,
+                                                         str(exc)))
+                pass
+        
+        # Run initThunk in a thread so as to not block HTTP connections
+        # due to the HTTP requests within.
+        t = threading.Thread(target=initThunk())
+        t.start()
     
 #    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
 #                         in_signature='ass', out_signature='')
