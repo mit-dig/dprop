@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
 import sys
+import os
 import socket
 import httplib
 import re
 import urllib
+import random
 from optparse import OptionParser
 from urlparse import urlparse
 
@@ -61,6 +63,29 @@ def formatCertName(cert):
 def pathifyURL(url):
     parsed = urlparse(url)
     return parsed.netloc + '/' + parsed.path
+
+def urandomGenForgeryKey():
+    """Generates a new forgery key using a cryptographically secure random
+    number generator."""
+    c = '0123456789ABCDEF'
+    bytes = os.urandom(16)
+    string = ''
+    for byte in bytes:
+        string += c[ord(byte) & 0x0F] + c[(ord(byte) >> 4) & 0x0F]
+    return string
+
+def randomGenForgeryKey():
+    """Generates a new forgery key using the default Mersenne twister
+    algorithm included with Python."""
+    c = '0123456789ABCDEF'
+    bytes = [random.randint(0, 255) for x in range(16)]
+    string = ''
+    for byte in bytes:
+        string += c[byte & 0x0F] + c[(byte >> 4) & 0x0F]
+    return string
+
+def genForgeryKey():
+    raise NotImplementedError
 
 class DPropManCellPeer(Resource):
     """HTTP collection representing a peer of a single cell."""
@@ -138,7 +163,16 @@ class DPropManCellPeers(Resource):
     
     def render_GET(self, request):
         pdebug("Received GET for Peers of %s" % (self.path))
+        cert = False
+        if self.dpropman.useSSL:
+            cert = request.channel.transport.getPeerCertificate()
+        
         cell = self.dpropman.cells[self.path]
+        
+        # Require a certificate?
+        if self.dpropman.useSSL and not cell.requireCert and not cert:
+            request.setResponseCode(httplib.FORBIDDEN)
+            return ""
         
         cell.peerLock.acquire()
         if request.getHeader('If-None-Match') == cell.peersEtag:
@@ -217,6 +251,11 @@ class DPropManCell(Resource):
         # Get the cell data.
         cell = self.dpropman.cells[self.path]
         
+        # Require a certificate?
+        if self.dpropman.useSSL and not cell.requireCert and not cert:
+            request.setResponseCode(httplib.FORBIDDEN)
+            return ""
+        
 #        # Perform access control (simple read/write limits for now)
 #        if cell.accessForCert(cert) == 'r':
 #            request.setHeader('X-Access', 'read')
@@ -263,7 +302,8 @@ class DPropManCell(Resource):
         
         # If so, forward the update to the cell so it can do the merge.
         pdebug("PUT was ACCEPTED! Forwarding Update!")
-        cell.doUpdate(parameters['data'][0], False)
+        cell.doUpdate(parameters['data'][0], request.getHeader('Referer'),
+                      False)
         
         # And let the client know that it was accepted.
         request.setResponseCode(httplib.ACCEPTED)
@@ -364,12 +404,15 @@ class Cell(dbus.service.Object):
         self.dataLock = threading.Lock()
         self.referer = referer
         self.cert = cert
-        self.key = key
+        self.forgeryKey = genForgeryKey()
+#        self.key = key
 #        self.readAccess = set()
 #        self.writeAccess = set()
-        self.peers = {self.referer: {'cert': self.cert, 'url': self.referer}}
+        self.peers = {self.referer: {'cert': None, 'url': self.referer}}
         self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
         self.peerLock = threading.Lock()
+        self.dpropSync = True
+        self.requireCert = True
         pdebug("New peersEtag: %s" % (self.peersEtag))
         
         # Set up synchronization
@@ -382,6 +425,13 @@ class Cell(dbus.service.Object):
                 def thunk():
                     pdebug("Attempting to sync %s to peer %s" % (self.uuid,
                                                                  peer['url']))
+                    if not self.dpropSync:
+                        # Send out the signal to do synchronization.
+                        pdebug("Sending out signal for delegation...")
+                        self.SyncSignal(self.forgeryKey,
+                                        self.referer, dpropjson.dumps(peer),
+                                        self.etag, self.peersEtag)
+                        return False
                     try:
                         url = urlparse(peer['url'])
                         if url.scheme == 'http':
@@ -389,9 +439,9 @@ class Cell(dbus.service.Object):
                         elif url.scheme == 'https':
                             # TODO: Is it safe to keep these keys and
                             # certs around???
-                            h = httplib.HTTPSConnection(url.netloc,
-                                                        key_file=self.key,
-                                                        cert_file=self.cert)
+                            h = httplib.HTTPSConnection(url.netloc)
+#                                                        key_file=self.key,
+#                                                        cert_file=self.cert)
                         pdebug("Attempting to sync data")
                         h.request('GET', url.path,
                                   headers={'Referer': self.referer,
@@ -400,7 +450,7 @@ class Cell(dbus.service.Object):
                         if resp.status == httplib.OK:
                             # Got a response.  Time to merge.
                             pdebug("Got new data in sync. Merging...")
-                            self.doUpdate(resp.read(), False)
+                            self.doUpdate(resp.read(), peer['url'], False)
                         elif resp.status == httplib.NOT_MODIFIED:
                             pdebug("Sync resulted in no new data.")
                             # Dummy resp.read() to make sure we can reuse h.
@@ -471,18 +521,43 @@ class Cell(dbus.service.Object):
                 canonical += "_%02X" % (ord(char))
         return canonical
     
-    def doUpdate(self, message, isLocal):
+    def doUpdate(self, message, peer, isLocal):
         """Handles sending out an update signal and then maybe updating
         peers.  Call me with a Python string containing JSON."""
         # Push the update along if it was a local update attempt.
         pdebug("%s sending out UpdateSignal" % (self.uuid))
-        self.UpdateSignal(message)
+        self.UpdateSignal(self.forgeryKey, message, peer)
         if isLocal:
             self.updatePeers(message)
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def UpdateSignal(self, message):
-        """[DBUS SIGNAL] Signals a requested update in the cell's content."""
+    def UpdateSignal(self, forgeryKey, message, peer):
+        """[DBUS SIGNAL] Signals a requested update from peer in the cell's
+        content."""
+        pass
+    
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def SyncSignal(self, forgeryKey, referer, peer, etag):
+        """[DBUS SIGNAL] Signals that a synchronization should be attempted
+        with the given peer."""
+        pass
+    
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def SendUpdateSignal(self, forgeryKey, referer, peer, message):
+        """[DBUS SIGNAL] Signals that an update should be sent to the given
+        peer."""
+        pass
+    
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def PeerAddSignal(self, forgeryKey, referer, peer):
+        """[DBUS SIGNAL] Signals that an update should be sent to the given
+        peer to add us."""
+        pass
+    
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def DoInitSignal(self, forgeryKey, referer, url):
+        """[DBUS SIGNAL] Signals that the cell should be initialized from the
+        peer."""
         pass
     
 #    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
@@ -504,6 +579,12 @@ class Cell(dbus.service.Object):
             def thunk():
                 pdebug("%s attempting to update peer %s" % (self.uuid,
                                                             peer['url']))
+                if not self.dpropSync:
+                    # Send out the signal to forward an update.
+                    pdebug("Sending out signal for delegation...")
+                    self.SendUpdateSignal(self.forgeryKey, self.referer, peer,
+                                          message)
+                    return False
                 try:
                     url = urlparse(peer['url'])
                     if url.scheme == 'http':
@@ -511,9 +592,9 @@ class Cell(dbus.service.Object):
                     elif url.scheme == 'https':
                         # TODO: Is it safe to keep these keys and
                         # certs around???
-                        h = httplib.HTTPSConnection(url.netloc,
-                                                    key_file=self.key,
-                                                    cert_file=self.cert)
+                        h = httplib.HTTPSConnection(url.netloc)
+#                                                    key_file=self.key,
+#                                                    cert_file=self.cert)
                     # We don't dpropjson encode here, as the data
                     # should already be in JSON.
                     h.request('PUT', url.path,
@@ -551,6 +632,18 @@ class Cell(dbus.service.Object):
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s', out_signature='')
+    def changePeers(self, data):
+        """[DBUS METHOD] Locally change the cell's peers based on data."""
+        pdebug("%s received changePeers() call" % (self.uuid))
+        self.peerLock.acquire()
+        self.peers.update(dpropjson.loads(str(data)))
+        self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
+        pdebug("New etag: %s" % (self.peersEtag))
+        self.peerLock.release()
+#        self.NewContentsSignal(str(data))
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='s', out_signature='')
     def changeCell(self, data):
         """[DBUS METHOD] Locally change the cell's contents to data."""
         pdebug("%s received changeCell() call" % (self.uuid))
@@ -567,7 +660,7 @@ class Cell(dbus.service.Object):
         """[DBUS METHOD] Locally attempt to update the cell's contents with
         data."""
         pdebug("%s received updateCell() call" % (self.uuid))
-        self.doUpdate(str(data), True)
+        self.doUpdate(str(data), self.referer, True)
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='', out_signature='s')
@@ -575,6 +668,74 @@ class Cell(dbus.service.Object):
         """[DBUS METHOD] Return the cell's data."""
         pdebug("%s received data() call" % (self.uuid))
         return self.data
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='b', out_signature='')
+    def setDPropDoesSyncing(self, dpropSync):
+        """[DBUS METHOD] Set whether DPropMan should do syncing for this cell
+        (e.g. if you don't want to use SSL to make connections
+        yourself to hide your personal certificate)."""
+        self.dpropSync = dpropSync
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='b')
+    def dPropDoesSyncing(self):
+        """[DBUS METHOD] Returns whether DPropMan is currently handling
+        syncing for this cell."""
+        return self.dpropSync
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='s', out_signature='')
+    def setCert(self, cert):
+        """[DBUS METHOD] Set the certificate (PEM format) associated with this
+        cell."""
+        self.peerLock.acquire()
+        self.cert = str(cert)
+        self.peers[self.referer]['cert'] = self.cert
+        self.peersEtag = makeEtag(dpropjson.dumps(self.peers))
+        pdebug("New peers etag: %s" % (self.peersEtag))
+        self.peerLock.release()
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='s')
+    def cert(self):
+        """[DBUS METHOD] Returns the certificate (PEM format) associated with
+        this cell."""
+        return self.cert
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='b', out_signature='')
+    def setRequireCert(self, requireCert):
+        """[DBUS METHOD] Set whether DPropMan should allow connections made
+        without a client certificate to this cell."""
+        self.requireCert = requireCert
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='b')
+    def requireCert(self):
+        """[DBUS METHOD] Returns whether DPropMan allows connections made
+        without a client certificate to this cell."""
+        # TODO: Should remote "require cert" override this require
+        # cert???
+        return self.requireCert
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='s', out_signature='s')
+    def certForPeer(self, peer):
+        """[DBUS METHOD] Returns the certificate associated with a given
+        peer."""
+        peer = str(peer)
+        if peer not in peers or 'cert' not in peers[peer]:
+            return ''
+        else:
+            return peers[peer]['cert']
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='s', out_signature='b')
+    def checkForgeryKey(self, possibleKey):
+        """[DBUS METHOD] Returns whether the given key matches the expected
+        forgery key."""
+        return str(possibleKey) == forgeryKey
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s', out_signature='')
@@ -588,6 +749,11 @@ class Cell(dbus.service.Object):
             def thunk():
                 pdebug("Attempting to add %s to peer %s" % (self.uuid,
                                                             peer['url']))
+                if not self.dpropSync:
+                    # Send out the signal to add to a peer.
+                    pdebug("Sending out signal for delegation...")
+                    self.PeerAddSignal(self.forgeryKey, self.referer, peer)
+                    return False
                 try:
                     url = urlparse(peer['url'])
                     if url.scheme == 'http':
@@ -595,12 +761,13 @@ class Cell(dbus.service.Object):
                     elif url.scheme == 'https':
                         # TODO: Is it safe to keep these keys and
                         # certs around???
-                        h = httplib.HTTPSConnection(url.netloc,
-                                                    key_file=self.key,
-                                                    cert_file=self.cert)
+                        h = httplib.HTTPSConnection(url.netloc)
+#                                                    key_file=self.key,
+#                                                    cert_file=self.cert)
                     h.request('PUT', url.path + '/Peers',
                               urllib.urlencode(
-                            {'peer': dpropjson.dumps({'url': self.referer})}),
+                            {'peer': dpropjson.dumps({'url': self.referer,
+                                                      'cert': self.cert})}),
                               {'Referer': self.referer,
                                'Content-Type':
                                    'application/x-www-form-urlencoded'})
@@ -642,6 +809,20 @@ class Cell(dbus.service.Object):
                 'on record for this cell (%s)' % (uuid, self.uuid))
         
         def initThunk():
+            if not self.dpropSync:
+                # Send out the signal to add to a peer.
+                pdebug("Sending out signal for delegation of initial data sync...")
+                self.DoInitSignal(self.forgeryKey, self.referer, url)
+                
+                pdebug("Setting up addToPeer thunks...")
+                for peerKey in self.peers:
+                    if peerKey == self.referer:
+                        continue
+                    # We now use threading.
+                    t = threading.Thread(target=thunkifyAddToPeer(self.peers[peerKey]))
+                    t.start()
+#                    gobject.idle_add(thunkifyAddToPeer(self.peers[peerKey]))
+                return
             try:
                 parsed_url = urlparse(url)
                 if parsed_url.scheme == 'http':
@@ -649,9 +830,9 @@ class Cell(dbus.service.Object):
                 elif parsed_url.scheme == 'https':
                     # TODO: Is it safe to keep these keys and
                     # certs around???
-                    h = httplib.HTTPSConnection(parsed_url.netloc,
-                                                key_file=self.key,
-                                                cert_file=self.cert)
+                    h = httplib.HTTPSConnection(parsed_url.netloc)
+#                                                key_file=self.key,
+#                                                cert_file=self.cert)
                 pdebug("Performing initial data sync.")
                 h.request('GET', parsed_url.path,
                           headers={'Referer': self.referer})
@@ -662,7 +843,7 @@ class Cell(dbus.service.Object):
                 else:
                     # Send the response out for a local merge.
                     pdebug("Performing merge...")
-                    self.doUpdate(resp.read(), False)
+                    self.doUpdate(resp.read(), url, False)
                 
                 pdebug("Performing initial peers sync.")
                 h.request('GET', parsed_url.path + '/Peers',
@@ -980,6 +1161,13 @@ def main():
     name = dbus.service.BusName('edu.mit.csail.dig.DPropMan', bus)
     dpropman = DPropMan(bus, '/DPropMan', port, hostname,
                         useSSL, options.cert, options.key)
+    
+    try:
+        os.urandom(1)
+        genForgeryKey = urandomGenForgeryKey
+    except NotImplementedError:
+        print "WARNING: os.urandom could not find a cryptographically secure random number generator.  DPropMan will fall back on a pseudorandom number generator, but results will not be cryptographically secure"
+        genForgeryKey = randomGenForgeryKey
     
     # Second, set up the server for remote connections.
     site = TwistedSite(DPropManTopLevel(dpropman))
