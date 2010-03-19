@@ -3,7 +3,7 @@ from dbus.mainloop.glib import DBusGMainLoop
 
 import dpropjson
 
-def update_signal_handler(raw_data):
+def update_signal_handler(raw_data, peer):
     data = dpropjson.loads(raw_data)
     print "Got Update: %s" % (`data`)
     cellman.changeCell(raw_data,
