@@ -404,7 +404,7 @@ class Cell(dbus.service.Object):
         self.dataLock = threading.Lock()
         self.referer = referer
         self.cert = cert
-        self.forgeryKey = genForgeryKey()
+#        self.forgeryKey = genForgeryKey()
 #        self.key = key
 #        self.readAccess = set()
 #        self.writeAccess = set()
@@ -428,8 +428,7 @@ class Cell(dbus.service.Object):
                     if not self.dpropSync:
                         # Send out the signal to do synchronization.
                         pdebug("Sending out signal for delegation...")
-                        self.SyncSignal(self.forgeryKey,
-                                        self.referer, dpropjson.dumps(peer),
+                        self.SyncSignal(self.referer, dpropjson.dumps(peer),
                                         self.etag, self.peersEtag)
                         return False
                     try:
@@ -526,36 +525,36 @@ class Cell(dbus.service.Object):
         peers.  Call me with a Python string containing JSON."""
         # Push the update along if it was a local update attempt.
         pdebug("%s sending out UpdateSignal" % (self.uuid))
-        self.UpdateSignal(self.forgeryKey, message, peer)
+        self.UpdateSignal(message, peer)
         if isLocal:
             self.updatePeers(message)
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def UpdateSignal(self, forgeryKey, message, peer):
+    def UpdateSignal(self, message, peer):
         """[DBUS SIGNAL] Signals a requested update from peer in the cell's
         content."""
         pass
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def SyncSignal(self, forgeryKey, referer, peer, etag):
+    def SyncSignal(self, referer, peer, etag):
         """[DBUS SIGNAL] Signals that a synchronization should be attempted
         with the given peer."""
         pass
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def SendUpdateSignal(self, forgeryKey, referer, peer, message):
+    def SendUpdateSignal(self, referer, peer, message):
         """[DBUS SIGNAL] Signals that an update should be sent to the given
         peer."""
         pass
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def PeerAddSignal(self, forgeryKey, referer, peer):
+    def PeerAddSignal(self, referer, peer):
         """[DBUS SIGNAL] Signals that an update should be sent to the given
         peer to add us."""
         pass
     
     @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-    def DoInitSignal(self, forgeryKey, referer, url):
+    def DoInitSignal(self, referer, url):
         """[DBUS SIGNAL] Signals that the cell should be initialized from the
         peer."""
         pass
@@ -582,8 +581,7 @@ class Cell(dbus.service.Object):
                 if not self.dpropSync:
                     # Send out the signal to forward an update.
                     pdebug("Sending out signal for delegation...")
-                    self.SendUpdateSignal(self.forgeryKey, self.referer, peer,
-                                          message)
+                    self.SendUpdateSignal(self.referer, peer, message)
                     return False
                 try:
                     url = urlparse(peer['url'])
@@ -730,12 +728,12 @@ class Cell(dbus.service.Object):
         else:
             return peers[peer]['cert']
     
-    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
-                         in_signature='s', out_signature='b')
-    def checkForgeryKey(self, possibleKey):
-        """[DBUS METHOD] Returns whether the given key matches the expected
-        forgery key."""
-        return str(possibleKey) == forgeryKey
+#    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+#                         in_signature='s', out_signature='b')
+#    def checkForgeryKey(self, possibleKey):
+#        """[DBUS METHOD] Returns whether the given key matches the expected
+#        forgery key."""
+#        return str(possibleKey) == forgeryKey
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s', out_signature='')
@@ -752,7 +750,7 @@ class Cell(dbus.service.Object):
                 if not self.dpropSync:
                     # Send out the signal to add to a peer.
                     pdebug("Sending out signal for delegation...")
-                    self.PeerAddSignal(self.forgeryKey, self.referer, peer)
+                    self.PeerAddSignal(self.referer, peer)
                     return False
                 try:
                     url = urlparse(peer['url'])
@@ -812,7 +810,7 @@ class Cell(dbus.service.Object):
             if not self.dpropSync:
                 # Send out the signal to add to a peer.
                 pdebug("Sending out signal for delegation of initial data sync...")
-                self.DoInitSignal(self.forgeryKey, self.referer, url)
+                self.DoInitSignal(self.referer, url)
                 
                 pdebug("Setting up addToPeer thunks...")
                 for peerKey in self.peers:

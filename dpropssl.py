@@ -16,18 +16,16 @@ def makeSSLSyncSignalThunk(cell, key, cert):
     # TODO: Still need to fix security of forwarding
     # updateCell/updatePeers
     
+    # TODO: Forgery keys are nice, but just listening to a cell will
+    # get you it, so it's not THAT much more nice.
+    
     # TODO: This is something of a carte-blanque to forcing GETs to
     # arbitrary servers.  This should be locked down.
-    def thunk(forgeryKey, referer, peer, etag, peersEtag):
+    def thunk(referer, peer, etag, peersEtag):
         referer = str(referer)
         peer = dpropjson.loads(str(peer))
         etag = str(etag)
         peersEtag = str(peersEtag)
-        forgeryKey = str(forgeryKey)
-        
-        # Check the forgery key against what the cell says.
-        if not cell.checkForgeryKey(forgeryKey):
-            return
         
         try:
             url = urlparse(peer['url'])
@@ -45,7 +43,7 @@ def makeSSLSyncSignalThunk(cell, key, cert):
             if resp.status == httplib.OK:
                 # Got a response.  Time to merge.
 #                pdebug("Got new data in sync. Merging...")
-                cell.UpdateSignal(forgeryKey, resp.read(), peer['url'],
+                cell.UpdateSignal(resp.read(), peer['url'],
                                   dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
             elif resp.status == httplib.NOT_MODIFIED:
 #                pdebug("Sync resulted in no new data.")
@@ -97,15 +95,10 @@ def makeSSLSendUpdateSignalThunk(cell, key, cert):
 
     # TODO: This is something of a carte-blanque to forcing PUTs to
     # arbitrary servers.  This should be locked down.
-    def thunk(forgeryKey, referer, peer, message):
+    def thunk(referer, peer, message):
         referer = str(referer)
         peer = dpropjson.loads(str(peer))
         message = str(message)
-        forgeryKey = str(forgeryKey)
-        
-        # Check the forgery key against what the cell says.
-        if not cell.checkForgeryKey(forgeryKey):
-            return
         
         try:
             url = urlparse(peer['url'])
@@ -154,14 +147,9 @@ def makeSSLPeerAddSignalThunk(cell, key, cert):
     cert_text = cf.read()
     cf.close()
     
-    def thunk(forgeryKey, referer, peer):
+    def thunk(referer, peer):
         referer = str(referer)
         peer = dpropjson.loads(str(peer))
-        forgeryKey = str(forgeryKey)
-        
-        # Check the forgery key against what the cell says.
-        if not cell.checkForgeryKey(forgeryKey):
-            return
         
         try:
             url = urlparse(peer['url'])
@@ -204,14 +192,9 @@ def makeSSLDoInitSignalThunk(cell, key, cert):
     
     # TODO: This is something of a carte-blanque to forcing PUTs to
     # arbitrary servers.  This should be locked down.
-    def thunk(forgeryKey, referer, url):
+    def thunk(referer, url):
         referer = str(referer)
         url = str(url)
-        forgeryKey = str(forgeryKey)
-        
-        # Check the forgery key against what the cell says.
-        if not cell.checkForgeryKey(forgeryKey):
-            return
         
         try:
             parsed_url = urlparse(url)
@@ -232,7 +215,7 @@ def makeSSLDoInitSignalThunk(cell, key, cert):
             else:
                 # Send the response out for a local merge.
 #                pdebug("Performing merge...")
-                cell.UpdateSignal(forgeryKey, resp.read(), url,
+                cell.UpdateSignal(resp.read(), url,
                                   dbus_interface='edu.mit.csail.dig.DPropMan.Cell')
             
 #            pdebug("Performing initial peers sync.")
