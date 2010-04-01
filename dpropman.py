@@ -559,10 +559,11 @@ class Cell(dbus.service.Object):
         peer."""
         pass
     
-#    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
-#    def NewContentsSignal(self, message):
-#        """[DBUS SIGNAL] Signals updated cell content."""
-#        pass
+    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
+    def NotifyPropagatorsSignal(self):
+        """[DBUS SIGNAL] Signals that a cell has changed its content and
+        connected propagators should wake up."""
+        pass
     
 #    @dbus.service.signal('edu.mit.csail.dig.DPropMan.Cell')
 #    def DestroySignal(self):
@@ -650,7 +651,7 @@ class Cell(dbus.service.Object):
             self.data = str(data)
             self.etag = makeEtag(self.data)
             self.dataLock.release()
-#            self.NewContentsSignal(str(data))
+            self.NotifyPropagatorsSignal()
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='s', out_signature='')
@@ -666,6 +667,12 @@ class Cell(dbus.service.Object):
         """[DBUS METHOD] Return the cell's data."""
         pdebug("%s received data() call" % (self.uuid))
         return self.data
+    
+    @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
+                         in_signature='', out_signature='s')
+    def url(self):
+        """[DBUS METHOD] Return the cell's url."""
+        return self.referer
     
     @dbus.service.method('edu.mit.csail.dig.DPropMan.Cell',
                          in_signature='b', out_signature='')
