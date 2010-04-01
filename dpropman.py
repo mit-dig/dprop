@@ -51,10 +51,11 @@ def ipAddresses():
 
 def makeEtag(data):
     """Generate an ETag."""
-    if hash(data) < 0:
-        return "%08X" % (hash(data) + 2 * (sys.maxint + 1))
+    myHash = hash(data) & 0xFFFFFFFF
+    if myHash < 0:
+        return "%08X" % (myHash + 2 * (sys.maxint + 1))
     else:
-        return "%08X" % (hash(data))
+        return "%08X" % (myHash)
 
 def formatCertName(cert):
     """Generate the string for the given X509Name."""
