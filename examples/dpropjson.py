@@ -6,7 +6,19 @@ if 'JSONEncoder' not in json.__dict__:
 class Nothing:
     """Nothing is known of a value (this is prior to explicitly setting 
     the value)."""
-    pass
+    def __iter__(self):
+        # Autofail.
+        class NothingIterator:
+            def __iter__(self):
+                return self
+            
+            def next(self):
+                raise StopIteration
+        
+        return NothingIterator()
+    
+    def keys(self):
+        return []
 
 class URI:
     """A URI reference."""

@@ -1,5 +1,5 @@
 import dbus, gobject, traceback, sys, dbus.service, dbus.mainloop.glib
-import httplib
+import httplib, socket
 
 import dpropjson, pydprop
 
@@ -49,12 +49,26 @@ def fetch_temperatures(date = None):
 def emit_temperature_update(rows, date=None):
     print "Sending update for Day %s..." % (rows[0][0])
     print " - range(%d, %d)" % (int(rows[0][2]), int(rows[0][1]))
+    
+    url = "/climate/getclimate.php?wfo=%s" % (WFO)
+    if date is None:
+        params = "product=CF6&station=%s&recent=yes" % (STATION)
+    else:
+        params = "product=CF6&station=%s&recent=no&date=%s" % (STATION, date)
+    
     temp_cell.update(dpropjson.dumps({'type': 'range',
                                       'min': int(rows[0][2]),
                                       'max': int(rows[0][1])}))
+    temp_cell.updateProvenance(dpropjson.dumps({'type': 'dpropProvenance',
+                                                'data': {'id': 'temperature-scraper',
+                                                         'ancestors': dpropjson.Nothing(),
+                                                         'url': url,
+                                                         'params': params,
+                                                         'host': socket.getfqdn()}}))
     
     if len(rows[1:]) > 0:
-        gobject.timeout_add(2000, lambda: emit_temperature_update(rows[1:], date))
+        gobject.timeout_add(2000, lambda: emit_temperature_update(rows[1:],
+                                                                  date))
     
     return False
 
@@ -91,22 +105,23 @@ def mergeRange(cell, raw_data, peer):
     else:
         print "Don't know how to handle this type.  Not merging."
 
-temps = fetch_temperatures('20100331')
+temps = fetch_temperatures('20100228')
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
 bus = dbus.SystemBus()
 try:
     # UUID for the temp. cell
-    uuid = 'c4add3d0-3cf3-11df-9879-0800200c9a66'
+    name = '/pipian.com:37767/Cells/c4add3d03cf311df98790800200c9a66'
+    url = "https:/%s" % (name)
     
-    temp_cell = pydprop.LocalCell(uuid, mergeRange)
+    temp_cell = pydprop.ProvenanceAwareRemoteCell(url, mergeRange)
 except dbus.DBusException:
     traceback.print_exc()
     print usage
     sys.exit(1)
 
-gobject.timeout_add(2000, lambda: emit_temperature_update(temps, '20100331'))
+gobject.timeout_add(2000, lambda: emit_temperature_update(temps, '20100228'))
 
 loop = gobject.MainLoop()
 loop.run()
