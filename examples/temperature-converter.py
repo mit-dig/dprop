@@ -5,22 +5,25 @@ import dpropjson, pydprop
 
 def mergeRange(cell, raw_data, peer):
     update = dpropjson.loads(raw_data)
-    print "Got Update: %s" % (`update`)
+    if str(peer) == cell.url():
+        print "\x1B[01;37;45mGot Local Update: %s\x1B[00m" % (`update`)
+    else:
+        print "\x1B[01;37;46mGot Remote Update: %s\x1B[00m" % (`update`)
     data = dpropjson.loads(cell.data())
     
     if not isinstance(update, dict):
-        print "Don't know how to handle data type.  Not merging."
+        print "\x1B[01;37;41mDon't know how to handle data type.  Not merging.\x1B[00m"
     elif 'type' not in update:
-        print "Can't handle arbitrary dicts.  Not merging."
+        print "\x1B[01;37;41mCan't handle arbitrary dicts.  Not merging.\x1B[00m"
     elif update['type'] == 'range':
         if 'min' not in update or 'max' not in update:
-            print "Hey, this isn't a range type!  Not merging."
+            print "\x1B[01;37;41mHey, this isn't a range type!  Not merging.\x1B[00m"
         elif not isinstance(update['min'], (int, long, float)) or not isinstance(update['max'], (int, long, float)):
-            print "Hey, these maxs/mins aren't numbers!  Not merging."
+            print "\x1B[01;37;41mHey, these maxs/mins aren't numbers!  Not merging.\x1B[00m"
         elif isinstance(data, dpropjson.Nothing):
             # Initialize the data.
             cell.set(raw_data)
-            print "Cell empty! Set to %s" % (`str(raw_data)`)
+            print "\x1B[01;37;44mCell empty! Set to %s\x1B[00m" % (`str(raw_data)`)
         else:
             # Intersect the ranges.
             updated = False
@@ -32,9 +35,9 @@ def mergeRange(cell, raw_data, peer):
                 data['max'] = update['max']
             if updated:
                 cell.set(dpropjson.dumps(data))
-                print "Cell now set to %s" % (`data`)
+                print "\x1B[01;37;44mCell now set to %s\x1B[00m" % (`data`)
     else:
-        print "Don't know how to handle this type.  Not merging."
+        print "\x1B[01;37;41mDon't know how to handle this type.  Not merging.\x1B[00m"
 
 def convert_temperature_range(range):
     return {'type': 'range',
@@ -42,7 +45,7 @@ def convert_temperature_range(range):
             'max': (float(range['max']) - 32) * 5 / 9}
 
 def convertTempRange():
-    print "Woke up converter propagator"
+    print "\x1B[01;43mWoke up converter propagator\x1B[00m"
     
     data = dpropjson.loads(temp_cell.data())
     
@@ -59,7 +62,7 @@ def convertTempRange():
     elif not isinstance(data['min'], int) or not isinstance(data['max'], int):
         return
     else:
-        print "Converted temperature to %s" % (`convert_temperature_range(data)`)
+        print "\x1B[01;43mConverted temperature to %s\x1B[00m" % (`convert_temperature_range(data)`)
         converted_cell.update(dpropjson.dumps(convert_temperature_range(data)))
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)

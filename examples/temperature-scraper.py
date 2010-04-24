@@ -47,8 +47,8 @@ def fetch_temperatures(date = None):
     return rows
 
 def emit_temperature_update(rows):
-    print "Sending update for Day %s..." % (rows[0][0])
-    print " - range(%d, %d)" % (int(rows[0][2]), int(rows[0][1]))
+    print "\x1B[01;37;42mSending update for Day %s...\x1B[00m" % (rows[0][0])
+    print "\x1B[01;37;42m - range(%d, %d)\x1B[00m" % (int(rows[0][2]), int(rows[0][1]))
     temp_cell.update(dpropjson.dumps({'type': 'range',
                                       'min': int(rows[0][2]),
                                       'max': int(rows[0][1])}))
@@ -60,22 +60,25 @@ def emit_temperature_update(rows):
 
 def mergeRange(cell, raw_data, peer):
     update = dpropjson.loads(raw_data)
-    print "Got Update: %s" % (`update`)
+    if str(peer) == cell.url():
+        print "\x1B[01;37;45mGot Local Update: %s\x1B[00m" % (`update`)
+    else:
+        print "\x1B[01;37;46mGot Remote Update: %s\x1B[00m" % (`update`)
     data = dpropjson.loads(cell.data())
     
     if not isinstance(update, dict):
-        print "Don't know how to handle data type.  Not merging."
+        print "\x1B[01;37;41mDon't know how to handle data type.  Not merging.\x1B[0m"
     elif 'type' not in update:
-        print "Can't handle arbitrary dicts.  Not merging."
+        print "\x1B[01;37;41mCan't handle arbitrary dicts.  Not merging.\x1B[0m"
     elif update['type'] == 'range':
         if 'min' not in update or 'max' not in update:
-            print "Hey, this isn't a range type!  Not merging."
+            print "\x1B[01;37;41mHey, this isn't a range type!  Not merging.\x1B[0m"
         elif not isinstance(update['min'], (int, long, float)) or not isinstance(update['max'], (int, long, float)):
-            print "Hey, these maxs/mins aren't numbers!  Not merging."
+            print "\x1B[01;37;41mHey, these maxs/mins aren't numbers!  Not merging.\x1B[0m"
         elif isinstance(data, dpropjson.Nothing):
             # Initialize the data.
             cell.set(raw_data)
-            print "Cell empty! Set to %s" % (`str(raw_data)`)
+            print "\x1B[01;37;44mCell empty! Set to %s\x1B[0m" % (`str(raw_data)`)
         else:
             # Intersect the ranges.
             updated = False
@@ -87,9 +90,9 @@ def mergeRange(cell, raw_data, peer):
                 data['max'] = update['max']
             if updated:
                 cell.set(dpropjson.dumps(data))
-                print "Cell now set to %s" % (`data`)
+                print "\x1B[01;37;44mCell now set to %s\x1B[0m" % (`data`)
     else:
-        print "Don't know how to handle this type.  Not merging."
+        print "\x1B[01;37;41mDon't know how to handle this type.  Not merging.\x1B[0m"
 
 temps = fetch_temperatures('20100228')
 
@@ -107,7 +110,7 @@ except dbus.DBusException:
     print usage
     sys.exit(1)
 
-gobject.timeout_add(2000, lambda: emit_temperature_update(temps))
+gobject.timeout_add(4000, lambda: emit_temperature_update(temps))
 
 loop = gobject.MainLoop()
 loop.run()
